@@ -107,7 +107,3 @@ Every merge to `master` publishes to GitHub Container Registry:
 
 - `ghcr.io/josh-uk/pigeonhole:latest`
 - `ghcr.io/josh-uk/pigeonhole:sha-<short-commit>` for pinning to an exact build
-
-## Upgrading from Scriptorium
-
-Pigeonhole was previously called Scriptorium. An existing `data/` folder is migrated automatically on first start. If you had scripts that read `SCRIPTORIUM_DATA`, switch them to `PIGEONHOLE_DATA`.

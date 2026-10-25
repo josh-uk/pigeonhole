@@ -34,10 +34,6 @@ STATIC = Path(__file__).parent / "static"
 for d in (SCRIPTS_DIR, RUNS_DIR, WORK_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-# the app used to be called Scriptorium; keep existing data working
-if (DATA / "scriptorium.db").exists() and not (DATA / "pigeonhole.db").exists():
-    (DATA / "scriptorium.db").rename(DATA / "pigeonhole.db")
-
 db = sqlite3.connect(DATA / "pigeonhole.db", check_same_thread=False)
 db.row_factory = sqlite3.Row
 db.executescript(
