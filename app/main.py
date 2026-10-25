@@ -546,4 +546,12 @@ async def index():
     return FileResponse(STATIC / "index.html")
 
 
+@app.middleware("http")
+async def revalidate_static(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/") or request.url.path == "/":
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
