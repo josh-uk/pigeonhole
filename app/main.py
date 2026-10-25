@@ -287,9 +287,10 @@ def apt_installed(name: str) -> bool:
 
 
 def apt_argv(action: str, pkgs: list[str]) -> list[str]:
-    pre = "apt-get update && " if action == "install" else ""
+    # the app runs unprivileged; sudoers only allows apt-get
+    pre = "sudo -n apt-get update && " if action == "install" else ""
     flags = "--no-install-recommends " if action == "install" else ""
-    return ["bash", "-c", f'{pre}DEBIAN_FRONTEND=noninteractive apt-get {action} -y {flags}"$@"', "_", *pkgs]
+    return ["bash", "-c", f'{pre}sudo -n apt-get {action} -y {flags}"$@"', "_", *pkgs]
 
 
 @asynccontextmanager

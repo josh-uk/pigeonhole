@@ -24,7 +24,7 @@ Write Python and bash in the browser, run them with live output, and put them on
 - **Per-script timeouts** and an overlap guard, so a scheduled script never runs on top of itself.
 
 > [!WARNING]
-> Pigeonhole has **no built-in authentication** and runs scripts (and installs packages) as **root inside the container**. Only expose it on a trusted network, or put it behind a reverse proxy that handles auth.
+> Pigeonhole has **no built-in authentication**, and anyone who can open the UI can run code in the container. Scripts run as an unprivileged user, but that user may use `sudo apt-get` (this is how the Packages page installs system packages), so treat the container as trusted. Only expose it on a trusted network, or put it behind a reverse proxy that handles auth.
 
 ## Quick start
 
@@ -39,6 +39,8 @@ services:
       - "8080:8080"
     environment:
       - TZ=Europe/London
+      - PUID=1000   # run as this user id (see `id -u`)
+      - PGID=1000   # and this group id (see `id -g`)
     volumes:
       - ./data:/data
     restart: unless-stopped
@@ -51,7 +53,7 @@ docker compose up -d
 ### Docker run
 
 ```bash
-docker run -d --name pigeonhole -p 8080:8080 -e TZ=Europe/London -v "$PWD/data:/data" --restart unless-stopped ghcr.io/josh-uk/pigeonhole:latest
+docker run -d --name pigeonhole -p 8080:8080 -e TZ=Europe/London -e PUID=$(id -u) -e PGID=$(id -g) -v "$PWD/data:/data" --restart unless-stopped ghcr.io/josh-uk/pigeonhole:latest
 ```
 
 Then open **http://localhost:8080**.
@@ -69,6 +71,8 @@ docker compose up -d --build
 | Variable   | Default | Description                                                          |
 |------------|---------|----------------------------------------------------------------------|
 | `TZ`       | `UTC`   | Timezone used for cron schedules and timestamps.                     |
+| `PUID`     | `1000`  | User id the app and your scripts run as. Files in `/data` are owned by it. |
+| `PGID`     | `1000`  | Group id to match.                                                   |
 | `MAX_RUNS` | `500`   | How many runs of history (and their logs) to keep.                   |
 | `DATA_DIR` | `/data` | Where everything is stored. Mount this as a volume.                  |
 
@@ -80,9 +84,10 @@ docker compose up -d --build
 | Script files as they run | `/data/scripts/` |
 | Run logs | `/data/runs/` |
 | Python packages | A shared virtualenv in `/data/venv` (survives container recreation) |
-| System packages | Installed with apt into the container; the list is stored in the database and re-installed on startup if missing |
+| System packages | Installed with apt (via `sudo`) into the container; the list is stored in the database and re-installed on startup if missing |
 | Working directory for scripts | `/data/work` |
 
+- The container starts as root just long enough to map the `pigeonhole` user to `PUID`/`PGID` and fix ownership of `/data`, then drops to that user. The app and every script run unprivileged; only `apt-get` is allowed through `sudo`.
 - Python scripts run with the virtualenv's interpreter, so anything you install on the **Packages** page is importable straight away.
 - Scripts can find the data directory via the `PIGEONHOLE_DATA` environment variable.
 - Schedules use standard 5-field cron. Weekly schedules are stored with day names (`mon,wed,fri`).
