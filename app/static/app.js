@@ -36,6 +36,96 @@ function show(v) {
   if (v === 'scripts') cm.refresh();
 }
 
+
+/* ---- schedule builder ---- */
+const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const DAY_LABEL = {mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun'};
+const pad = n => String(n).padStart(2, '0');
+const defaultSched = () => ({type: 'manual', n: 5, minute: 0, time: '09:00', days: ['mon', 'tue', 'wed', 'thu', 'fri'], dom: 1, cron: ''});
+let sched = defaultSched(), tz = '';
+
+function cronFromSched(s) {
+  const [h, m] = s.time.split(':').map(Number);
+  switch (s.type) {
+    case 'manual': return '';
+    case 'minutes': return `*/${s.n} * * * *`;
+    case 'hours': return `${s.minute} */${s.n} * * *`;
+    case 'daily': return `${m} ${h} * * *`;
+    case 'weekly': return `${m} ${h} * * ${DAYS.filter(d => s.days.includes(d)).join(',')}`;
+    case 'monthly': return `${m} ${h} ${s.dom} * *`;
+    default: return s.cron.trim();
+  }
+}
+function schedFromCron(cron) {
+  const s = defaultSched();
+  cron = (cron || '').trim();
+  if (!cron) return s;
+  const custom = () => { s.type = 'custom'; s.cron = cron; return s; };
+  const f = cron.split(/\s+/);
+  if (f.length !== 5) return custom();
+  const [mi, h, d, mo, w] = f, num = /^\d+$/, step = /^\*\/\d+$/;
+  if (mo !== '*') return custom();
+  if ((mi === '*' || step.test(mi)) && h === '*' && d === '*' && w === '*') { s.type = 'minutes'; s.n = mi === '*' ? 1 : +mi.slice(2); return s; }
+  if (num.test(mi) && step.test(h) && d === '*' && w === '*') { s.type = 'hours'; s.minute = +mi; s.n = +h.slice(2); return s; }
+  if (num.test(mi) && h === '*' && d === '*' && w === '*') { s.type = 'hours'; s.minute = +mi; s.n = 1; return s; }
+  if (num.test(mi) && num.test(h)) {
+    s.time = `${pad(h)}:${pad(mi)}`;
+    if (d === '*' && w === '*') { s.type = 'daily'; return s; }
+    if (d === '*' && /^[a-z]{3}(,[a-z]{3})*$/i.test(w)) {
+      const days = w.toLowerCase().split(',');
+      if (days.every(x => DAYS.includes(x))) { s.type = 'weekly'; s.days = days; return s; }
+    }
+    if (num.test(d) && w === '*') { s.type = 'monthly'; s.dom = +d; return s; }
+  }
+  return custom();
+}
+function describeSched(s) {
+  switch (s.type) {
+    case 'manual': return 'Manual only';
+    case 'minutes': return s.n === 1 ? 'Every minute' : `Every ${s.n} minutes`;
+    case 'hours': return (s.n === 1 ? 'Every hour' : `Every ${s.n} hours`) + ` at :${pad(s.minute)}`;
+    case 'daily': return `Every day at ${s.time}`;
+    case 'weekly': {
+      const d = DAYS.filter(x => s.days.includes(x)), key = d.join();
+      const txt = key === 'mon,tue,wed,thu,fri' ? 'Weekdays' : key === 'sat,sun' ? 'Weekends' : d.length === 7 ? 'Every day' : d.map(x => DAY_LABEL[x]).join(', ');
+      return `${txt} at ${s.time}`;
+    }
+    case 'monthly': return `Monthly on day ${s.dom} at ${s.time}`;
+    default: return 'Custom: ' + s.cron;
+  }
+}
+const describeCron = cron => describeSched(schedFromCron(cron));
+
+$('#schDays').innerHTML = DAYS.map(d => `<button type="button" class="day" data-d="${d}">${DAY_LABEL[d]}</button>`).join('');
+function writeSched() {
+  $('#schType').value = sched.type; $('#schN').value = sched.n; $('#schMinute').value = sched.minute;
+  $('#schTime').value = sched.time; $('#schDom').value = sched.dom; $('#schCron').value = sched.cron;
+  document.querySelectorAll('#schDays .day').forEach(b => b.classList.toggle('on', sched.days.includes(b.dataset.d)));
+  renderSched();
+}
+function readSched() {
+  sched.type = $('#schType').value;
+  sched.n = Math.max(1, +$('#schN').value || 1); sched.minute = Math.min(59, Math.max(0, +$('#schMinute').value || 0));
+  sched.time = $('#schTime').value || '09:00'; sched.dom = Math.min(31, Math.max(1, +$('#schDom').value || 1));
+  sched.cron = $('#schCron').value;
+  sched.days = [...document.querySelectorAll('#schDays .day.on')].map(b => b.dataset.d);
+  renderSched();
+}
+function renderSched() {
+  const t = sched.type;
+  const vis = {gEvery: t === 'minutes' || t === 'hours', gMinute: t === 'hours', gDays: t === 'weekly', gDom: t === 'monthly',
+    gTime: ['daily', 'weekly', 'monthly'].includes(t), gCron: t === 'custom'};
+  for (const [id, on] of Object.entries(vis)) $('#' + id).style.display = on ? '' : 'none';
+  $('#schUnit').textContent = t === 'hours' ? 'hours' : 'minutes';
+  $('#schN').max = t === 'hours' ? 23 : 59;
+  $('#fEnabled').parentElement.style.display = t === 'manual' ? 'none' : '';
+  const next = cur && cur.next_run && cur.enabled && cur.schedule === cronFromSched(sched) ? `  ·  next: ${fmtTime(cur.next_run)}` : '';
+  $('#schSummary').textContent = t === 'manual' ? 'Only runs when you press Run' : `${describeSched(sched)}${tz ? ' (' + tz + ')' : ''}  ·  cron: ${cronFromSched(sched) || '-'}${next}`;
+}
+$('#schType').onchange = readSched;
+document.querySelectorAll('#schN,#schMinute,#schTime,#schDom,#schCron').forEach(i => i.oninput = readSched);
+document.querySelectorAll('#schDays .day').forEach(b => b.onclick = () => { b.classList.toggle('on'); readSched(); });
+
 /* ---- scripts ---- */
 const cm = CodeMirror.fromTextArea($('#code'), {
   mode: 'python', theme: 'material-darker', lineNumbers: true, indentUnit: 4, indentWithTabs: false,
@@ -57,8 +147,9 @@ async function loadScripts() {
 }
 function renderList() {
   $('#scriptList').innerHTML = scripts.map(s => `<div class="item ${cur && cur.id === s.id ? 'active' : ''}" data-id="${s.id}">
-    <span class="dot ${s.last_status || ''}"></span><span class="name">${esc(s.name)}</span>
-    ${s.schedule && s.enabled ? '<span class="badge" title="' + esc(s.schedule) + '">cron</span>' : ''}<span class="badge">${s.language === 'python' ? 'py' : 'sh'}</span></div>`).join('')
+    <span class="dot ${s.last_status || ''}"></span>
+    <div class="meta"><span class="name">${esc(s.name)}</span>${s.schedule ? `<span class="sub ${s.enabled ? '' : 'paused'}" title="cron: ${esc(s.schedule)}">${s.enabled ? '' : 'Paused - '}${esc(describeCron(s.schedule))}</span>` : ''}</div>
+    <span class="badge">${s.language === 'python' ? 'py' : 'sh'}</span></div>`).join('')
     || '<div class="hint" style="padding:12px">No scripts yet.</div>';
   document.querySelectorAll('.item').forEach(i => i.onclick = () => select(+i.dataset.id));
 }
@@ -69,7 +160,8 @@ function select(id) {
   if (!cur) return;
   $('#noScript').style.display = 'none';
   $('#editorBody').style.display = 'flex';
-  $('#fName').value = cur.name; $('#fLang').value = cur.language; $('#fSched').value = cur.schedule;
+  $('#fName').value = cur.name; $('#fLang').value = cur.language;
+  sched = schedFromCron(cur.schedule); writeSched();
   $('#fTimeout').value = cur.timeout; $('#fEnabled').checked = cur.enabled;
   cm.setOption('mode', modeOf(cur.language)); cm.setValue(cur.content); cm.clearHistory();
   setTimeout(() => cm.refresh(), 0);
@@ -81,7 +173,7 @@ function select(id) {
   setRunUI(null);
   if (cur.running_run) watch(cur.running_run);
 }
-function showNext() { $('#nextRun').textContent = cur && cur.next_run ? 'next: ' + fmtTime(cur.next_run) : ''; }
+function showNext() { renderSched(); }
 function setRunUI(runId) {
   curRun = runId;
   $('#stopBtn').style.display = runId ? '' : 'none';
@@ -104,8 +196,9 @@ $('#fLang').onchange = () => {
 };
 async function save() {
   if (!cur) return null;
+  if (sched.type === 'weekly' && !sched.days.length) { toast('Pick at least one day', true); return null; }
   const body = {
-    name: $('#fName').value, language: $('#fLang').value, content: cm.getValue(), schedule: $('#fSched').value,
+    name: $('#fName').value, language: $('#fLang').value, content: cm.getValue(), schedule: cronFromSched(sched),
     enabled: $('#fEnabled').checked, timeout: +$('#fTimeout').value || 0,
   };
   try {
@@ -186,12 +279,13 @@ $('#aptIn').onkeydown = e => { if (e.key === 'Enter') $('#aptBtn').click(); };
 async function loadSettings() {
   const s = await api('/settings');
   $('#sNtfy').value = s.ntfy_url;
-  $('#tzInfo').textContent = 'Cron schedules use timezone: ' + s.timezone;
+  $('#tzInfo').textContent = 'Schedules use timezone: ' + s.timezone;
 }
 const saveSettings = () => api('/settings', 'PUT', {ntfy_url: $('#sNtfy').value});
 $('#sSave').onclick = guard(async () => { await saveSettings(); toast('Settings saved'); });
 $('#sTest').onclick = guard(async () => { await saveSettings(); await api('/settings/test', 'POST'); toast('Test notification sent'); });
 
+api('/settings').then(x => { tz = x.timezone; renderSched(); }).catch(() => {});
 loadScripts().catch(e => toast(e.message, true));
 setInterval(() => {
   if (!$('#v-scripts').classList.contains('active') || curRun) return;
