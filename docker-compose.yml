@@ -1,7 +1,8 @@
 services:
-  scriptorium:
+  pigeonhole:
+    image: ghcr.io/josh-uk/pigeonhole:latest
     build: .
-    container_name: scriptorium
+    container_name: pigeonhole
     ports:
       - "8080:8080"
     environment:

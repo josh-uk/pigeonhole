@@ -1,5 +1,9 @@
 FROM python:3.12-slim-bookworm
 
+LABEL org.opencontainers.image.title="Pigeonhole" \
+      org.opencontainers.image.description="Write, run and schedule Python and bash scripts from a web UI" \
+      org.opencontainers.image.source="https://github.com/josh-uk/pigeonhole"
+
 ENV PYTHONUNBUFFERED=1 \
     DATA_DIR=/data \
     TZ=UTC
