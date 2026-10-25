@@ -269,10 +269,14 @@ def sync_schedule():
         job.remove()
     for r in db.execute("SELECT id, schedule FROM scripts WHERE enabled=1 AND schedule!=''"):
         try:
-            scheduler.add_job(start_script, CronTrigger.from_crontab(r["schedule"], timezone=TZ),
+            scheduler.add_job(scheduled_start, CronTrigger.from_crontab(r["schedule"], timezone=TZ),
                               args=[r["id"], "schedule"], id=f"s{r['id']}", coalesce=True, misfire_grace_time=60)
         except ValueError:
             pass
+
+
+async def scheduled_start(script_id: int, trigger: str):
+    start_script(script_id, trigger)
 
 
 def next_run(script_id: int) -> Optional[float]:
@@ -355,12 +359,12 @@ def script_dict(r, with_content=True):
 
 
 @app.get("/api/scripts")
-def list_scripts():
+async def list_scripts():
     return [script_dict(r) for r in db.execute("SELECT * FROM scripts ORDER BY name COLLATE NOCASE")]
 
 
 @app.post("/api/scripts")
-def create_script(s: ScriptIn):
+async def create_script(s: ScriptIn):
     validate(s)
     cur = db.execute("INSERT INTO scripts (name,language,content,schedule,enabled,timeout,updated) VALUES (?,?,?,?,?,?,?)",
                      (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, time.time()))
@@ -370,7 +374,7 @@ def create_script(s: ScriptIn):
 
 
 @app.put("/api/scripts/{sid}")
-def update_script(sid: int, s: ScriptIn):
+async def update_script(sid: int, s: ScriptIn):
     validate(s)
     if not db.execute("SELECT 1 FROM scripts WHERE id=?", (sid,)).fetchone():
         raise HTTPException(404)
@@ -382,7 +386,7 @@ def update_script(sid: int, s: ScriptIn):
 
 
 @app.delete("/api/scripts/{sid}")
-def delete_script(sid: int):
+async def delete_script(sid: int):
     row = db.execute("SELECT * FROM scripts WHERE id=?", (sid,)).fetchone()
     if row:
         script_path(row).unlink(missing_ok=True)
@@ -393,13 +397,13 @@ def delete_script(sid: int):
 
 
 @app.post("/api/scripts/{sid}/run")
-def run_script(sid: int):
+async def run_script(sid: int):
     return {"run_id": start_script(sid, "manual")}
 
 
 # -------------------------------------------------------------------- runs API
 @app.get("/api/runs")
-def list_runs(script_id: Optional[int] = None, limit: int = 100):
+async def list_runs(script_id: Optional[int] = None, limit: int = 100):
     q, args = "SELECT * FROM runs", []
     if script_id:
         q += " WHERE script_id=?"
@@ -408,7 +412,7 @@ def list_runs(script_id: Optional[int] = None, limit: int = 100):
 
 
 @app.post("/api/runs/{rid}/stop")
-def stop_run(rid: int):
+async def stop_run(rid: int):
     s = STREAMS.get(rid)
     if not s or not s.proc:
         raise HTTPException(404, "run is not active")
@@ -468,14 +472,14 @@ async def pip_list():
 
 
 @app.post("/api/pip/install")
-def pip_install(p: Packages):
+async def pip_install(p: Packages):
     pkgs = parse(p, PIP_SPEC)
     return {"run_id": start_job(f"pip install {' '.join(pkgs)}",
                                 [str(VENV_BIN / "python"), "-m", "pip", "install", "--no-input", *pkgs])}
 
 
 @app.post("/api/pip/uninstall")
-def pip_uninstall(p: Packages):
+async def pip_uninstall(p: Packages):
     pkgs = parse(p, PIP_SPEC)
     return {"run_id": start_job(f"pip uninstall {' '.join(pkgs)}",
                                 [str(VENV_BIN / "python"), "-m", "pip", "uninstall", "-y", *pkgs])}
@@ -488,7 +492,7 @@ async def apt_list():
 
 
 @app.post("/api/apt/install")
-def apt_install(p: Packages):
+async def apt_install(p: Packages):
     pkgs = parse(p, APT_NAME)
 
     def remember():
@@ -499,7 +503,7 @@ def apt_install(p: Packages):
 
 
 @app.post("/api/apt/remove")
-def apt_remove(p: Packages):
+async def apt_remove(p: Packages):
     pkgs = parse(p, APT_NAME)
 
     def forget():
@@ -516,12 +520,12 @@ class Settings(BaseModel):
 
 
 @app.get("/api/settings")
-def read_settings():
+async def read_settings():
     return {"webhook_url": get_setting("webhook_url"), "ntfy_url": get_setting("ntfy_url"), "timezone": TZ}
 
 
 @app.put("/api/settings")
-def write_settings(s: Settings):
+async def write_settings(s: Settings):
     for k, v in s.model_dump().items():
         db.execute("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                    (k, v.strip()))
@@ -538,7 +542,7 @@ async def test_notification():
 
 
 @app.get("/")
-def index():
+async def index():
     return FileResponse(STATIC / "index.html")
 
 
