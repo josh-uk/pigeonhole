@@ -139,8 +139,7 @@ label.f{display:flex;flex-direction:column;gap:4px;color:var(--dim);font-size:13
     <div class="page">
       <div class="card" style="max-width:640px">
         <h2>Failure notifications</h2>
-        <div class="hint">Sent when a script fails or times out. Leave blank to disable.</div>
-        <label class="f">Webhook URL (receives JSON POST)<input type="url" id="sWebhook" placeholder="https://example.com/hook"></label>
+        <div class="hint">Sent to your <a href="https://ntfy.sh" target="_blank" rel="noopener" style="color:var(--accent)">ntfy</a> topic when a script fails or times out. Leave blank to disable.</div>
         <label class="f">ntfy topic URL<input type="url" id="sNtfy" placeholder="https://ntfy.sh/my-topic"></label>
         <div class="row" style="flex:none"><button class="btn primary" id="sSave" style="flex:none">Save</button><button class="btn" id="sTest" style="flex:none">Send test</button></div>
         <div class="hint" id="tzInfo"></div>
