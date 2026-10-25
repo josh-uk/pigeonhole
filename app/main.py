@@ -62,6 +62,8 @@ db.executescript(
     CREATE TABLE IF NOT EXISTS apt_packages (name TEXT PRIMARY KEY);
     """
 )
+if "env" not in {r["name"] for r in db.execute("PRAGMA table_info(scripts)")}:
+    db.execute("ALTER TABLE scripts ADD COLUMN env TEXT NOT NULL DEFAULT ''")
 db.commit()
 
 scheduler = AsyncIOScheduler(timezone=TZ)
@@ -113,6 +115,30 @@ def child_env() -> dict:
     env["PYTHONUNBUFFERED"] = "1"
     env["PIGEONHOLE_DATA"] = str(DATA)
     return env
+
+
+ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def parse_env(text: str) -> dict[str, str]:
+    """Parse KEY=value lines (blank lines and # comments ignored, optional quotes and `export `)."""
+    out: dict[str, str] = {}
+    for n, line in enumerate(text.replace("\r\n", "\n").split("\n"), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, sep, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if not sep or not ENV_NAME.match(key):
+            raise ValueError(f"line {n}: expected KEY=value with a name like MY_VAR")
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if "\0" in value:
+            raise ValueError(f"line {n}: value contains a null byte")
+        out[key] = value
+    return out
 
 
 async def execute(run_id: int, stream: Stream, argv: list[str], timeout: int = 0,
@@ -210,12 +236,14 @@ def start_script(script_id: int, trigger: str) -> int:
     path = script_path(row)
     path.write_text(row["content"].replace("\r\n", "\n"))
     argv = [str(VENV_BIN / "python"), "-u", str(path)] if row["language"] == "python" else ["bash", str(path)]
+    env = child_env()
+    env.update(parse_env(row["env"]))
     run_id, stream = new_run(row["name"], trigger, script_id)
     RUNNING_SCRIPTS[script_id] = run_id
 
     async def job():
         try:
-            status = await execute(run_id, stream, argv, row["timeout"])
+            status = await execute(run_id, stream, argv, row["timeout"], env=env)
         finally:
             RUNNING_SCRIPTS.pop(script_id, None)
         if status in ("failed", "timeout"):
@@ -325,6 +353,7 @@ class ScriptIn(BaseModel):
     schedule: str = ""
     enabled: bool = True
     timeout: int = 0
+    env: str = ""
 
 
 def validate(s: ScriptIn):
@@ -332,6 +361,10 @@ def validate(s: ScriptIn):
         raise HTTPException(400, "language must be python or bash")
     if not s.name.strip():
         raise HTTPException(400, "name is required")
+    try:
+        parse_env(s.env)
+    except ValueError as e:
+        raise HTTPException(400, f"environment variables: {e}")
     s.schedule = s.schedule.strip()
     if s.schedule:
         try:
@@ -361,8 +394,8 @@ async def list_scripts():
 @app.post("/api/scripts")
 async def create_script(s: ScriptIn):
     validate(s)
-    cur = db.execute("INSERT INTO scripts (name,language,content,schedule,enabled,timeout,updated) VALUES (?,?,?,?,?,?,?)",
-                     (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, time.time()))
+    cur = db.execute("INSERT INTO scripts (name,language,content,schedule,enabled,timeout,env,updated) VALUES (?,?,?,?,?,?,?,?)",
+                     (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, s.env, time.time()))
     db.commit()
     sync_schedule()
     return script_dict(db.execute("SELECT * FROM scripts WHERE id=?", (cur.lastrowid,)).fetchone())
@@ -373,8 +406,8 @@ async def update_script(sid: int, s: ScriptIn):
     validate(s)
     if not db.execute("SELECT 1 FROM scripts WHERE id=?", (sid,)).fetchone():
         raise HTTPException(404)
-    db.execute("UPDATE scripts SET name=?,language=?,content=?,schedule=?,enabled=?,timeout=?,updated=? WHERE id=?",
-               (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, time.time(), sid))
+    db.execute("UPDATE scripts SET name=?,language=?,content=?,schedule=?,enabled=?,timeout=?,env=?,updated=? WHERE id=?",
+               (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, s.env, time.time(), sid))
     db.commit()
     sync_schedule()
     return script_dict(db.execute("SELECT * FROM scripts WHERE id=?", (sid,)).fetchone())
