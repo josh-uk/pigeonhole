@@ -51,6 +51,10 @@ pre.out{margin:0;background:#0d0f12;padding:10px 12px;overflow:auto;font:12.5px/
 .item .meta{flex:1;min-width:0;display:flex;flex-direction:column}
 .item .sub{font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .item .sub.paused{opacity:.6;font-style:italic}
+.envbox{padding:6px 10px;background:var(--panel);border-bottom:1px solid var(--line);font-size:13px}
+.envbox summary{cursor:pointer;color:var(--dim);font-weight:500;user-select:none}
+.envbox textarea{display:block;width:100%;height:110px;margin:8px 0 4px;resize:vertical;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace;white-space:pre;overflow:auto}
+.envbox textarea:focus{outline:1px solid var(--accent)}
 .cm-wrap{flex:1;min-height:120px;position:relative}
 .CodeMirror{position:absolute;inset:0;height:auto;font-size:13px}
 .split{height:34%;min-height:100px;display:flex;flex-direction:column;border-top:1px solid var(--line)}
@@ -125,6 +129,11 @@ label.f{display:flex;flex-direction:column;gap:4px;color:var(--dim);font-size:13
           <label><input type="checkbox" id="fEnabled"> Enabled</label>
           <span class="hint" id="schSummary"></span>
         </div>
+        <details class="envbox" id="envBox">
+          <summary>Environment variables <span class="badge" id="envCount"></span></summary>
+          <textarea id="fEnv" spellcheck="false" autocomplete="off" placeholder="API_KEY=abc123&#10;BASE_URL=http://192.168.1.10:8080"></textarea>
+          <div class="hint">One KEY=value per line, passed to this script every time it runs. Lines starting with # are ignored. Stored as plain text in the database, and anyone who can open this page can read them.</div>
+        </details>
         <div class="cm-wrap"><textarea id="code"></textarea></div>
         <div class="split">
           <div class="hd"><b>Output</b><span id="runStatus"></span><span style="flex:1"></span>

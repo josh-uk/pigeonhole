@@ -155,7 +155,7 @@ function renderList() {
 }
 function select(id) {
   cur = id === 'new'
-    ? {id: null, name: '', language: 'python', content: templates.python, schedule: '', enabled: true, timeout: 0}
+    ? {id: null, name: '', language: 'python', content: templates.python, schedule: '', enabled: true, timeout: 0, env: ''}
     : scripts.find(s => s.id === id);
   if (!cur) return;
   $('#noScript').style.display = 'none';
@@ -163,6 +163,8 @@ function select(id) {
   $('#fName').value = cur.name; $('#fLang').value = cur.language;
   sched = schedFromCron(cur.schedule); writeSched();
   $('#fTimeout').value = cur.timeout; $('#fEnabled').checked = cur.enabled;
+  $('#fEnv').value = cur.env || ''; countEnv();
+  $('#envBox').open = !!(cur.env || '').trim();
   cm.setOption('mode', modeOf(cur.language)); cm.setValue(cur.content); cm.clearHistory();
   setTimeout(() => cm.refresh(), 0);
   $('#delBtn').style.display = cur.id ? '' : 'none';
@@ -189,6 +191,12 @@ function watch(runId) {
     showNext();
   });
 }
+function countEnv() {
+  const n = $('#fEnv').value.split('\n').filter(l => l.trim() && !l.trim().startsWith('#')).length;
+  $('#envCount').textContent = n || '';
+  $('#envCount').style.display = n ? '' : 'none';
+}
+$('#fEnv').oninput = countEnv;
 $('#fLang').onchange = () => {
   const old = cm.getValue();
   cm.setOption('mode', modeOf($('#fLang').value));
@@ -199,7 +207,7 @@ async function save() {
   if (sched.type === 'weekly' && !sched.days.length) { toast('Pick at least one day', true); return null; }
   const body = {
     name: $('#fName').value, language: $('#fLang').value, content: cm.getValue(), schedule: cronFromSched(sched),
-    enabled: $('#fEnabled').checked, timeout: +$('#fTimeout').value || 0,
+    enabled: $('#fEnabled').checked, timeout: +$('#fTimeout').value || 0, env: $('#fEnv').value,
   };
   try {
     const s = cur.id ? await api('/scripts/' + cur.id, 'PUT', body) : await api('/scripts', 'POST', body);

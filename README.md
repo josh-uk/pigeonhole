@@ -19,6 +19,7 @@ Write Python and bash in the browser, run them with live output, and put them on
 - **Live output.** Watch stdout and stderr stream in as the script runs, and stop it at any time.
 - **Human-friendly scheduling.** Pick "Every 5 minutes", "Weekdays at 08:00" or "Monthly on day 1" from a builder, or drop to raw cron when you need to. The script list shows each schedule in plain English.
 - **Run history.** Every run (manual, scheduled or package install) keeps its log, exit code and duration.
+- **Environment variables per script.** Give a script API keys, URLs and other settings from the editor (one `KEY=value` per line) instead of hard-coding them. They are passed to every run, manual or scheduled.
 - **Install what your scripts need.** Add Python packages with pip and system packages with apt (ffmpeg, jq, imagemagick and so on) from the UI. apt packages are remembered and put back if the container is recreated.
 - **Failure alerts** to your [ntfy](https://ntfy.sh) topic when a script fails or times out.
 - **Per-script timeouts** and an overlap guard, so a scheduled script never runs on top of itself.
@@ -90,6 +91,7 @@ docker compose up -d --build
 - The container starts as root just long enough to map the `pigeonhole` user to `PUID`/`PGID` and fix ownership of `/data`, then drops to that user. The app and every script run unprivileged; only `apt-get` is allowed through `sudo`.
 - Python scripts run with the virtualenv's interpreter, so anything you install on the **Packages** page is importable straight away.
 - Scripts can find the data directory via the `PIGEONHOLE_DATA` environment variable.
+- Per-script environment variables are stored as plain text in the database (`/data/pigeonhole.db`), next to the script, and are visible to anyone who can open the UI. They override the container's own variables of the same name. Lines starting with `#` are ignored, and values can be wrapped in quotes.
 - Schedules use standard 5-field cron. Weekly schedules are stored with day names (`mon,wed,fri`).
 
 ## Notifications
