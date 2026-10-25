@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🕊️ Pigeonhole
+# 🐦 Pigeonhole
 
 **A tiny self-hosted home for your scripts.**
 Write Python and bash in the browser, run them with live output, and put them on a schedule, all from one small Docker container.
