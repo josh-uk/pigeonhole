@@ -4,6 +4,7 @@ import codecs
 import json
 import os
 import re
+import secrets
 import signal
 import sqlite3
 import subprocess
@@ -16,7 +17,7 @@ from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -62,8 +63,12 @@ db.executescript(
     CREATE TABLE IF NOT EXISTS apt_packages (name TEXT PRIMARY KEY);
     """
 )
-if "env" not in {r["name"] for r in db.execute("PRAGMA table_info(scripts)")}:
-    db.execute("ALTER TABLE scripts ADD COLUMN env TEXT NOT NULL DEFAULT ''")
+_columns = {r["name"] for r in db.execute("PRAGMA table_info(scripts)")}
+for _name, _ddl in (("env", "TEXT NOT NULL DEFAULT ''"),
+                    ("hook_token", "TEXT NOT NULL DEFAULT ''"),
+                    ("hook_delay", "INTEGER NOT NULL DEFAULT 60")):
+    if _name not in _columns:
+        db.execute(f"ALTER TABLE scripts ADD COLUMN {_name} {_ddl}")
 db.commit()
 
 scheduler = AsyncIOScheduler(timezone=TZ)
@@ -246,6 +251,7 @@ def start_script(script_id: int, trigger: str) -> int:
             status = await execute(run_id, stream, argv, row["timeout"], env=env)
         finally:
             RUNNING_SCRIPTS.pop(script_id, None)
+            hook_finished(script_id)
         if status in ("failed", "timeout"):
             await asyncio.to_thread(notify_failure, row["name"], status, run_id)
 
@@ -306,6 +312,58 @@ def next_run(script_id: int) -> Optional[float]:
     return job.next_run_time.timestamp() if job and job.next_run_time else None
 
 
+# ------------------------------------------------------------------ webhooks
+# A webhook call does not run the script straight away. Calls are batched: the script runs once
+# the calls have been quiet for hook_delay seconds, and calls that arrive while it is running
+# trigger exactly one more run afterwards. All of this state lives in memory; a restart drops it.
+HOOK_TIMERS: dict[int, asyncio.TimerHandle] = {}
+HOOK_FIRST: dict[int, float] = {}  # script id -> when its oldest waiting call arrived
+HOOK_AGAIN: set[int] = set()  # script ids called while running
+HOOK_MAX_WAIT = 10  # a waiting run is held back at most this many times the quiet period
+
+
+def hook_clear(script_id: int):
+    timer = HOOK_TIMERS.pop(script_id, None)
+    if timer:
+        timer.cancel()
+    HOOK_FIRST.pop(script_id, None)
+    HOOK_AGAIN.discard(script_id)
+
+
+def hook_arm(script_id: int, delay: int) -> float:
+    """(Re)start the quiet-period timer and return how many seconds until the script runs."""
+    now = time.monotonic()
+    first = HOOK_FIRST.setdefault(script_id, now)
+    wait = max(0.0, min(float(delay), first + delay * HOOK_MAX_WAIT - now))
+    old = HOOK_TIMERS.pop(script_id, None)
+    if old:
+        old.cancel()
+    HOOK_TIMERS[script_id] = asyncio.get_running_loop().call_later(wait, hook_fire, script_id)
+    return wait
+
+
+def hook_fire(script_id: int):
+    HOOK_TIMERS.pop(script_id, None)
+    HOOK_FIRST.pop(script_id, None)
+    if script_id in RUNNING_SCRIPTS:  # a manual or scheduled run started in the meantime
+        HOOK_AGAIN.add(script_id)
+        return
+    try:
+        start_script(script_id, "webhook")
+    except HTTPException:  # the script was deleted while waiting
+        pass
+
+
+def hook_finished(script_id: int):
+    """Calls that arrived during a run get one more run, after a fresh quiet period."""
+    if script_id not in HOOK_AGAIN:
+        return
+    HOOK_AGAIN.discard(script_id)
+    row = db.execute("SELECT hook_token, hook_delay FROM scripts WHERE id=?", (script_id,)).fetchone()
+    if row and row["hook_token"]:
+        hook_arm(script_id, row["hook_delay"])
+
+
 # ------------------------------------------------------------------- startup
 def apt_installed(name: str) -> bool:
     try:
@@ -354,6 +412,7 @@ class ScriptIn(BaseModel):
     enabled: bool = True
     timeout: int = 0
     env: str = ""
+    hook_delay: int = 60
 
 
 def validate(s: ScriptIn):
@@ -361,6 +420,8 @@ def validate(s: ScriptIn):
         raise HTTPException(400, "language must be python or bash")
     if not s.name.strip():
         raise HTTPException(400, "name is required")
+    if not 0 <= s.hook_delay <= 3600:
+        raise HTTPException(400, "webhook quiet period must be between 0 and 3600 seconds")
     try:
         parse_env(s.env)
     except ValueError as e:
@@ -394,8 +455,8 @@ async def list_scripts():
 @app.post("/api/scripts")
 async def create_script(s: ScriptIn):
     validate(s)
-    cur = db.execute("INSERT INTO scripts (name,language,content,schedule,enabled,timeout,env,updated) VALUES (?,?,?,?,?,?,?,?)",
-                     (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, s.env, time.time()))
+    cur = db.execute("INSERT INTO scripts (name,language,content,schedule,enabled,timeout,env,hook_delay,updated) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, s.env, s.hook_delay, time.time()))
     db.commit()
     sync_schedule()
     return script_dict(db.execute("SELECT * FROM scripts WHERE id=?", (cur.lastrowid,)).fetchone())
@@ -406,8 +467,9 @@ async def update_script(sid: int, s: ScriptIn):
     validate(s)
     if not db.execute("SELECT 1 FROM scripts WHERE id=?", (sid,)).fetchone():
         raise HTTPException(404)
-    db.execute("UPDATE scripts SET name=?,language=?,content=?,schedule=?,enabled=?,timeout=?,env=?,updated=? WHERE id=?",
-               (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, s.env, time.time(), sid))
+    db.execute("UPDATE scripts SET name=?,language=?,content=?,schedule=?,enabled=?,timeout=?,env=?,hook_delay=?,updated=? WHERE id=?",
+               (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, s.env, s.hook_delay,
+                time.time(), sid))
     db.commit()
     sync_schedule()
     return script_dict(db.execute("SELECT * FROM scripts WHERE id=?", (sid,)).fetchone())
@@ -420,6 +482,7 @@ async def delete_script(sid: int):
         script_path(row).unlink(missing_ok=True)
     db.execute("DELETE FROM scripts WHERE id=?", (sid,))
     db.commit()
+    hook_clear(sid)
     sync_schedule()
     return {"ok": True}
 
@@ -427,6 +490,47 @@ async def delete_script(sid: int):
 @app.post("/api/scripts/{sid}/run")
 async def run_script(sid: int):
     return {"run_id": start_script(sid, "manual")}
+
+
+# -------------------------------------------------------------------- webhooks API
+@app.post("/api/scripts/{sid}/hook")
+async def create_hook(sid: int):
+    """Create the script's webhook URL token, or replace it (the old URL stops working)."""
+    if not db.execute("SELECT 1 FROM scripts WHERE id=?", (sid,)).fetchone():
+        raise HTTPException(404)
+    db.execute("UPDATE scripts SET hook_token=? WHERE id=?", (secrets.token_urlsafe(24), sid))
+    db.commit()
+    hook_clear(sid)
+    return script_dict(db.execute("SELECT * FROM scripts WHERE id=?", (sid,)).fetchone())
+
+
+@app.delete("/api/scripts/{sid}/hook")
+async def delete_hook(sid: int):
+    if not db.execute("SELECT 1 FROM scripts WHERE id=?", (sid,)).fetchone():
+        raise HTTPException(404)
+    db.execute("UPDATE scripts SET hook_token='' WHERE id=?", (sid,))
+    db.commit()
+    hook_clear(sid)
+    return script_dict(db.execute("SELECT * FROM scripts WHERE id=?", (sid,)).fetchone())
+
+
+@app.api_route("/api/hooks/{token}", methods=["POST", "PUT"])
+async def webhook(token: str, request: Request):
+    """Called by anything that can send a POST. The body is ignored."""
+    row = db.execute("SELECT id, hook_delay FROM scripts WHERE hook_token=? AND hook_token!=''", (token,)).fetchone()
+    if not row:
+        raise HTTPException(404, "unknown webhook")
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 - an empty or non-JSON body is fine
+        payload = None
+    if isinstance(payload, dict) and payload.get("eventType") == "Test":  # a sender's "Test" button
+        return {"status": "test", "detail": "webhook reachable, script not run"}
+    sid = row["id"]
+    if sid in RUNNING_SCRIPTS:
+        HOOK_AGAIN.add(sid)
+        return {"status": "queued", "detail": "script is running, it will run once more afterwards"}
+    return {"status": "scheduled", "runs_in": round(hook_arm(sid, row["hook_delay"]))}
 
 
 # -------------------------------------------------------------------- runs API

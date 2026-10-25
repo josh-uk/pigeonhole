@@ -55,6 +55,9 @@ pre.out{margin:0;background:#0d0f12;padding:10px 12px;overflow:auto;font:12.5px/
 .envbox summary{cursor:pointer;color:var(--dim);font-weight:500;user-select:none}
 .envbox textarea{display:block;width:100%;height:110px;margin:8px 0 4px;resize:vertical;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace;white-space:pre;overflow:auto}
 .envbox textarea:focus{outline:1px solid var(--accent)}
+.hookrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0 4px}
+.hookrow input[type=text]{flex:1;min-width:260px;font:12.5px ui-monospace,Menlo,Consolas,monospace}
+.hookrow label{color:var(--dim);display:flex;align-items:center;gap:5px}
 .cm-wrap{flex:1;min-height:120px;position:relative}
 .CodeMirror{position:absolute;inset:0;height:auto;font-size:13px}
 .split{height:34%;min-height:100px;display:flex;flex-direction:column;border-top:1px solid var(--line)}
@@ -133,6 +136,23 @@ label.f{display:flex;flex-direction:column;gap:4px;color:var(--dim);font-size:13
           <summary>Environment variables <span class="badge" id="envCount"></span></summary>
           <textarea id="fEnv" spellcheck="false" autocomplete="off" placeholder="API_KEY=abc123&#10;BASE_URL=http://192.168.1.10:8080"></textarea>
           <div class="hint">One KEY=value per line, passed to this script every time it runs. Lines starting with # are ignored. Stored as plain text in the database, and anyone who can open this page can read them.</div>
+        </details>
+        <details class="envbox" id="hookBox">
+          <summary>Webhook trigger <span class="badge" id="hookBadge">on</span></summary>
+          <div id="hookNone">
+            <div class="hookrow"><button class="btn" id="hookEnable">Create webhook URL</button></div>
+            <div class="hint">Gives this script a URL that anything able to send a POST can call to start it. Save the script first.</div>
+          </div>
+          <div id="hookSet">
+            <div class="hookrow">
+              <input type="text" id="hookUrl" readonly>
+              <button class="btn" id="hookCopy">Copy</button>
+              <button class="btn" id="hookRegen">New URL</button>
+              <button class="btn danger" id="hookDisable">Remove</button>
+            </div>
+            <div class="hookrow"><label>Wait for <input type="number" id="fHookDelay" min="0" max="3600" style="width:80px"> seconds of quiet before running (Save to apply)</label></div>
+            <div class="hint">POST to this URL to start the script. Calls close together are batched into one run, and calls that arrive during a run trigger one more run afterwards. Use an address the sender can reach (your server's LAN IP and port, not an external URL). Anyone with this URL can start the script, so keep it on your LAN.</div>
+          </div>
         </details>
         <div class="cm-wrap"><textarea id="code"></textarea></div>
         <div class="split">

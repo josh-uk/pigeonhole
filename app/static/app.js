@@ -155,7 +155,7 @@ function renderList() {
 }
 function select(id) {
   cur = id === 'new'
-    ? {id: null, name: '', language: 'python', content: templates.python, schedule: '', enabled: true, timeout: 0, env: ''}
+    ? {id: null, name: '', language: 'python', content: templates.python, schedule: '', enabled: true, timeout: 0, env: '', hook_token: '', hook_delay: 60}
     : scripts.find(s => s.id === id);
   if (!cur) return;
   $('#noScript').style.display = 'none';
@@ -165,6 +165,8 @@ function select(id) {
   $('#fTimeout').value = cur.timeout; $('#fEnabled').checked = cur.enabled;
   $('#fEnv').value = cur.env || ''; countEnv();
   $('#envBox').open = !!(cur.env || '').trim();
+  $('#fHookDelay').value = cur.hook_delay ?? 60; renderHook();
+  $('#hookBox').open = !!cur.hook_token;
   cm.setOption('mode', modeOf(cur.language)); cm.setValue(cur.content); cm.clearHistory();
   setTimeout(() => cm.refresh(), 0);
   $('#delBtn').style.display = cur.id ? '' : 'none';
@@ -197,6 +199,30 @@ function countEnv() {
   $('#envCount').style.display = n ? '' : 'none';
 }
 $('#fEnv').oninput = countEnv;
+
+function renderHook() {
+  const has = !!(cur && cur.id && cur.hook_token);
+  $('#hookNone').style.display = has ? 'none' : '';
+  $('#hookSet').style.display = has ? '' : 'none';
+  $('#hookBadge').style.display = has ? '' : 'none';
+  $('#hookEnable').disabled = !(cur && cur.id);
+  if (has) $('#hookUrl').value = `${location.origin}/api/hooks/${cur.hook_token}`;
+}
+async function setHook(method) {
+  const s = await api(`/scripts/${cur.id}/hook`, method);
+  scripts = scripts.map(x => x.id === s.id ? s : x);
+  cur = s;
+  renderHook();
+}
+$('#hookEnable').onclick = guard(() => setHook('POST'));
+$('#hookRegen').onclick = guard(async () => { if (confirm('Make a new URL? The current one stops working.')) await setHook('POST'); });
+$('#hookDisable').onclick = guard(async () => { if (confirm('Remove the webhook URL? Anything calling it will get an error.')) await setHook('DELETE'); });
+$('#hookCopy').onclick = guard(async () => {
+  const input = $('#hookUrl');
+  try { await navigator.clipboard.writeText(input.value); }
+  catch { input.select(); document.execCommand('copy'); }  // plain http pages have no clipboard API
+  toast('Copied');
+});
 $('#fLang').onchange = () => {
   const old = cm.getValue();
   cm.setOption('mode', modeOf($('#fLang').value));
@@ -208,12 +234,13 @@ async function save() {
   const body = {
     name: $('#fName').value, language: $('#fLang').value, content: cm.getValue(), schedule: cronFromSched(sched),
     enabled: $('#fEnabled').checked, timeout: +$('#fTimeout').value || 0, env: $('#fEnv').value,
+    hook_delay: $('#fHookDelay').value === '' ? 60 : +$('#fHookDelay').value,
   };
   try {
     const s = cur.id ? await api('/scripts/' + cur.id, 'PUT', body) : await api('/scripts', 'POST', body);
     await loadScripts();
     cur = scripts.find(x => x.id === s.id);
-    renderList(); showNext();
+    renderList(); showNext(); renderHook();
     $('#delBtn').style.display = '';
     toast('Saved');
     return s.id;
