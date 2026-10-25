@@ -179,8 +179,8 @@ async function loadPkgs() {
 }
 $('#pipBtn').onclick = pkgJob('/pip/install', '#pipIn');
 $('#aptBtn').onclick = pkgJob('/apt/install', '#aptIn');
-$('#pipIn').onkeydown = e => e.key === 'Enter' && $('#pipBtn').click();
-$('#aptIn').onkeydown = e => e.key === 'Enter' && $('#aptBtn').click();
+$('#pipIn').onkeydown = e => { if (e.key === 'Enter') $('#pipBtn').click(); };
+$('#aptIn').onkeydown = e => { if (e.key === 'Enter') $('#aptBtn').click(); };
 
 /* ---- settings ---- */
 async function loadSettings() {
