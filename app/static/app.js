@@ -136,8 +136,8 @@ const cm = CodeMirror.fromTextArea($('#code'), {
 });
 let scripts = [], cur = null, curEs = null, curRun = null;
 const templates = {
-  python: '#!/usr/bin/env python3\nprint("Hello from Scriptorium")\n',
-  bash: '#!/usr/bin/env bash\nset -euo pipefail\necho "Hello from Scriptorium"\n',
+  python: '#!/usr/bin/env python3\nprint("Hello from Pigeonhole")\n',
+  bash: '#!/usr/bin/env bash\nset -euo pipefail\necho "Hello from Pigeonhole"\n',
 };
 const modeOf = l => l === 'python' ? 'python' : 'shell';
 
@@ -266,7 +266,7 @@ function pkgJob(path, input) {
 async function loadPkgs() {
   const [pip, apt] = await Promise.all([api('/pip'), api('/apt')]);
   $('#pipList').innerHTML = pip.map(p => `<div class="pk"><div>${esc(p.name)}<span class="v">${esc(p.version)}</span></div><button class="btn danger" data-p="${esc(p.name)}" style="padding:1px 8px">remove</button></div>`).join('') || '<div class="hint">Nothing installed.</div>';
-  $('#aptList').innerHTML = apt.map(p => `<div class="pk"><div>${esc(p.name)}${p.installed ? '' : '<span class="v s-failed">not installed</span>'}</div><button class="btn danger" data-a="${esc(p.name)}" style="padding:1px 8px">remove</button></div>`).join('') || '<div class="hint">Nothing installed through Scriptorium.</div>';
+  $('#aptList').innerHTML = apt.map(p => `<div class="pk"><div>${esc(p.name)}${p.installed ? '' : '<span class="v s-failed">not installed</span>'}</div><button class="btn danger" data-a="${esc(p.name)}" style="padding:1px 8px">remove</button></div>`).join('') || '<div class="hint">Nothing installed through Pigeonhole.</div>';
   document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { $('#pipIn').value = b.dataset.p; pkgJob('/pip/uninstall', '#pipIn')(); });
   document.querySelectorAll('[data-a]').forEach(b => b.onclick = () => { $('#aptIn').value = b.dataset.a; pkgJob('/apt/remove', '#aptIn')(); });
 }

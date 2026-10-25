@@ -1,4 +1,4 @@
-"""Scriptorium: write, run and schedule Python/bash scripts from a web UI."""
+"""Pigeonhole: write, run and schedule Python/bash scripts from a web UI."""
 import asyncio
 import codecs
 import json
@@ -34,7 +34,11 @@ STATIC = Path(__file__).parent / "static"
 for d in (SCRIPTS_DIR, RUNS_DIR, WORK_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-db = sqlite3.connect(DATA / "scriptorium.db", check_same_thread=False)
+# the app used to be called Scriptorium; keep existing data working
+if (DATA / "scriptorium.db").exists() and not (DATA / "pigeonhole.db").exists():
+    (DATA / "scriptorium.db").rename(DATA / "pigeonhole.db")
+
+db = sqlite3.connect(DATA / "pigeonhole.db", check_same_thread=False)
 db.row_factory = sqlite3.Row
 db.executescript(
     """
@@ -111,7 +115,7 @@ def child_env() -> dict:
     env["PATH"] = f"{VENV_BIN}{os.pathsep}{env.get('PATH', '')}"
     env["VIRTUAL_ENV"] = str(VENV)
     env["PYTHONUNBUFFERED"] = "1"
-    env["SCRIPTORIUM_DATA"] = str(DATA)
+    env["PIGEONHOLE_DATA"] = str(DATA)
     return env
 
 
@@ -238,7 +242,7 @@ def start_job(title: str, argv: list[str], on_success=None) -> int:
 
 
 # ------------------------------------------------------------ notifications
-def send_ntfy(message: str, title: str = "Scriptorium", tags: str = "warning") -> Optional[str]:
+def send_ntfy(message: str, title: str = "Pigeonhole", tags: str = "warning") -> Optional[str]:
     """Publish a message to the configured ntfy topic; returns an error string or None."""
     url = get_setting("ntfy_url")
     if not url:
@@ -313,7 +317,7 @@ def shutil_which(cmd: str) -> bool:
     return which(cmd) is not None
 
 
-app = FastAPI(title="Scriptorium", lifespan=lifespan)
+app = FastAPI(title="Pigeonhole", lifespan=lifespan)
 
 
 # ----------------------------------------------------------------- scripts API
@@ -530,7 +534,7 @@ async def write_settings(s: Settings):
 
 @app.post("/api/settings/test")
 async def test_notification():
-    error = await asyncio.to_thread(send_ntfy, "Test notification from Scriptorium", "Scriptorium", "white_check_mark")
+    error = await asyncio.to_thread(send_ntfy, "Test notification from Pigeonhole", "Pigeonhole", "white_check_mark")
     if error:
         raise HTTPException(502, error)
     return {"ok": True}
