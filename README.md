@@ -20,6 +20,7 @@ Write Python and bash in the browser, run them with live output, and put them on
 - **Human-friendly scheduling.** Pick "Every 5 minutes", "Weekdays at 08:00" or "Monthly on day 1" from a builder, or drop to raw cron when you need to. The script list shows each schedule in plain English.
 - **Run history.** Every run (manual, scheduled or package install) keeps its log, exit code and duration.
 - **Environment variables per script.** Give a script API keys, URLs and other settings from the editor (one `KEY=value` per line) instead of hard-coding them. They are passed to every run, manual or scheduled.
+- **Webhook triggers.** Give a script a URL that Radarr, Sonarr, or anything that can send a POST, uses to start it. Calls that arrive close together are batched into one run.
 - **Install what your scripts need.** Add Python packages with pip and system packages with apt (ffmpeg, jq, imagemagick and so on) from the UI. apt packages are remembered and put back if the container is recreated.
 - **Failure alerts** to your [ntfy](https://ntfy.sh) topic when a script fails or times out.
 - **Per-script timeouts** and an overlap guard, so a scheduled script never runs on top of itself.
@@ -97,6 +98,25 @@ docker compose up -d --build
 ## Notifications
 
 Open **Settings**, paste your ntfy topic URL (for example `https://ntfy.sh/my-topic`) and press **Send test**. From then on a failed or timed-out script publishes a high-priority message.
+
+## Webhooks
+
+Open a script, expand **Webhook trigger** and press **Create webhook URL** (save a new script first). You get a URL like `http://<server>:8080/api/hooks/<token>`; a `POST` (or `PUT`) to it starts the script. The request body is ignored, and a run started this way shows `webhook` as its trigger in History.
+
+```bash
+curl -X POST http://localhost:8080/api/hooks/<token>
+```
+
+Calls are batched rather than run one by one, which matters when something sends a burst of them (a season pack being imported, for example):
+
+- The script runs once the calls have been quiet for the **quiet period** (60 seconds by default, set it next to the URL and press Save; `0` runs straight away). A steady stream cannot hold a run back for more than ten times the quiet period.
+- Calls that arrive **while the script is running** trigger one more run after it finishes, again after a quiet period.
+- Waiting calls are kept in memory only, so a restart of the container forgets them. Keep a scheduled run as a safety net for anything that matters.
+
+For Radarr and Sonarr, add a **Webhook** under *Settings → Connect* with the URL and the POST method. Its **Test** button reaches the URL and gets an answer without running the script. For Sonarr tick *On Import Complete* (it fires once per batch rather than once per episode) and *On Upgrade*; for Radarr tick *On Import* and *On Upgrade*. Use an address Radarr and Sonarr can reach, such as the server's LAN IP and port.
+
+> [!WARNING]
+> The token in the URL is the only protection on a webhook, and anyone who has the URL can start the script. Treat it like a password: keep it on a trusted network, and press **New URL** if it leaks. **Remove** deletes it. The token is also visible to anyone who can open the UI, and appears in the container's request log.
 
 ## Development
 
