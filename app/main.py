@@ -219,7 +219,7 @@ def start_script(script_id: int, trigger: str) -> int:
         finally:
             RUNNING_SCRIPTS.pop(script_id, None)
         if status in ("failed", "timeout"):
-            await asyncio.to_thread(notify, row["name"], status, run_id)
+            await asyncio.to_thread(notify_failure, row["name"], status, run_id)
 
     asyncio.create_task(job())
     return run_id
@@ -238,29 +238,23 @@ def start_job(title: str, argv: list[str], on_success=None) -> int:
 
 
 # ------------------------------------------------------------ notifications
-def post(url: str, data: bytes, headers: dict):
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    urllib.request.urlopen(req, timeout=10).read()
+def send_ntfy(message: str, title: str = "Scriptorium", tags: str = "warning") -> Optional[str]:
+    """Publish a message to the configured ntfy topic; returns an error string or None."""
+    url = get_setting("ntfy_url")
+    if not url:
+        return "no ntfy URL configured"
+    try:
+        req = urllib.request.Request(url, data=message.encode(), method="POST",
+                                     headers={"Title": title, "Priority": "high", "Tags": tags})
+        urllib.request.urlopen(req, timeout=10).read()
+    except Exception as e:  # noqa: BLE001
+        return f"ntfy: {e}"
+    return None
 
 
-def notify(name: str, status: str, run_id: int, test: bool = False):
-    webhook, ntfy = get_setting("webhook_url"), get_setting("ntfy_url")
-    msg = f"Script '{name}' {status} (run #{run_id})"
-    errors = []
-    if webhook:
-        try:
-            post(webhook, json.dumps({"script": name, "status": status, "run_id": run_id, "message": msg}).encode(),
-                 {"Content-Type": "application/json"})
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"webhook: {e}")
-    if ntfy:
-        try:
-            post(ntfy, msg.encode(), {"Title": "Scriptorium", "Priority": "high", "Tags": "warning"})
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"ntfy: {e}")
-    if test and not (webhook or ntfy):
-        errors.append("no notification target configured")
-    return errors
+def notify_failure(name: str, status: str, run_id: int):
+    if get_setting("ntfy_url"):
+        send_ntfy(f"Script '{name}' {status} (run #{run_id})")
 
 
 # ---------------------------------------------------------------- scheduling
@@ -515,17 +509,18 @@ async def apt_remove(p: Packages):
 
 # ------------------------------------------------------------------ settings
 class Settings(BaseModel):
-    webhook_url: str = ""
     ntfy_url: str = ""
 
 
 @app.get("/api/settings")
 async def read_settings():
-    return {"webhook_url": get_setting("webhook_url"), "ntfy_url": get_setting("ntfy_url"), "timezone": TZ}
+    return {"ntfy_url": get_setting("ntfy_url"), "timezone": TZ}
 
 
 @app.put("/api/settings")
 async def write_settings(s: Settings):
+    if s.ntfy_url.strip() and not s.ntfy_url.strip().startswith(("http://", "https://")):
+        raise HTTPException(400, "ntfy URL must start with http:// or https://")
     for k, v in s.model_dump().items():
         db.execute("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                    (k, v.strip()))
@@ -535,9 +530,9 @@ async def write_settings(s: Settings):
 
 @app.post("/api/settings/test")
 async def test_notification():
-    errors = await asyncio.to_thread(notify, "test", "test notification", 0, True)
-    if errors:
-        raise HTTPException(502, "; ".join(errors))
+    error = await asyncio.to_thread(send_ntfy, "Test notification from Scriptorium", "Scriptorium", "white_check_mark")
+    if error:
+        raise HTTPException(502, error)
     return {"ok": True}
 
 

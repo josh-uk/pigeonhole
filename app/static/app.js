@@ -185,11 +185,10 @@ $('#aptIn').onkeydown = e => { if (e.key === 'Enter') $('#aptBtn').click(); };
 /* ---- settings ---- */
 async function loadSettings() {
   const s = await api('/settings');
-  $('#sWebhook').value = s.webhook_url;
   $('#sNtfy').value = s.ntfy_url;
   $('#tzInfo').textContent = 'Cron schedules use timezone: ' + s.timezone;
 }
-const saveSettings = () => api('/settings', 'PUT', {webhook_url: $('#sWebhook').value, ntfy_url: $('#sNtfy').value});
+const saveSettings = () => api('/settings', 'PUT', {ntfy_url: $('#sNtfy').value});
 $('#sSave').onclick = guard(async () => { await saveSettings(); toast('Settings saved'); });
 $('#sTest').onclick = guard(async () => { await saveSettings(); await api('/settings/test', 'POST'); toast('Test notification sent'); });
 
