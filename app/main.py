@@ -1025,6 +1025,12 @@ async def index():
     return FileResponse(STATIC / "index.html")
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    # for clients that ask for /favicon.ico instead of reading the <link> tags
+    return FileResponse(STATIC / "favicon-32.png", media_type="image/png")
+
+
 @app.middleware("http")
 async def revalidate_static(request, call_next):
     response = await call_next(request)
