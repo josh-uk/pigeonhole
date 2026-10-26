@@ -349,7 +349,13 @@ function renderMcp(m) {
   const url = `${location.origin}/mcp`;
   $('#mcpUrl').value = url;
   $('#mcpToken').value = m.token;
-  $('#mcpCmd').value = `claude mcp add --transport http --scope user pigeonhole ${url} --header "Authorization: Bearer ${m.token}"`;
+  const bearer = `Bearer ${m.token}`;
+  $('#mcpCmd').value = `claude mcp add --transport http --scope user pigeonhole ${url} --header "Authorization: ${bearer}"`;
+  $('#mcpCopilot').value = `copilot mcp add --transport http --header "Authorization: ${bearer}" pigeonhole ${url}`;
+  // mcp-remote refuses plain http:// unless told otherwise; the token goes in env so the space in it survives
+  const args = ['mcp-remote', url, ...(url.startsWith('http:') ? ['--allow-http'] : []), '--header', 'Authorization:${AUTH_HEADER}'];
+  $('#mcpDesktop').value = JSON.stringify({pigeonhole: {command: 'npx', args, env: {AUTH_HEADER: bearer}}}, null, 2);
+  $('#mcpCodex').value = `[mcp_servers.pigeonhole]\nurl = ${JSON.stringify(url)}\nhttp_headers = { Authorization = ${JSON.stringify(bearer)} }`;
   for (const [k, on] of Object.entries(m.permissions)) $('#mcpAllow_' + k).checked = on;
 }
 const mcpChecks = () => [...document.querySelectorAll('[id^=mcpAllow_]')];
