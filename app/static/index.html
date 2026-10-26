@@ -56,8 +56,9 @@ pre.out{margin:0;background:#0d0f12;padding:10px 12px;overflow:auto;font:12.5px/
 .item .sub.paused{opacity:.6;font-style:italic}
 .envbox{padding:6px 10px;background:var(--panel);border-bottom:1px solid var(--line);font-size:13px}
 .envbox summary{cursor:pointer;color:var(--dim);font-weight:500;user-select:none}
-.envbox textarea{display:block;width:100%;height:110px;margin:8px 0 4px;resize:vertical;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace;white-space:pre;overflow:auto}
-.envbox textarea:focus{outline:1px solid var(--accent)}
+.envbox textarea,textarea.envtext{display:block;width:100%;height:110px;margin:8px 0 4px;resize:vertical;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace;white-space:pre;overflow:auto}
+textarea.envtext{height:140px;margin:0}
+.envbox textarea:focus,textarea.envtext:focus{outline:1px solid var(--accent)}
 .hookrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0 4px}
 .hookrow input[type=text]{flex:1;min-width:260px;font:12.5px ui-monospace,Menlo,Consolas,monospace}
 .hookrow label{color:var(--dim);display:flex;align-items:center;gap:5px}
@@ -144,6 +145,7 @@ code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddin
           <summary>Environment variables <span class="badge" id="envCount"></span></summary>
           <textarea id="fEnv" spellcheck="false" autocomplete="off" placeholder="API_KEY=abc123&#10;BASE_URL=http://192.168.1.10:8080"></textarea>
           <div class="hint">One KEY=value per line, passed to this script every time it runs. Lines starting with # are ignored. Stored as plain text in the database, and anyone who can open this page can read them.</div>
+          <div class="hint" id="envGlobal"></div>
         </details>
         <details class="envbox" id="hookBox">
           <summary>Webhook trigger <span class="badge" id="hookBadge">on</span></summary>
@@ -206,6 +208,12 @@ code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddin
         <label class="f">ntfy topic URL<input type="url" id="sNtfy" placeholder="https://ntfy.sh/my-topic"></label>
         <div class="row" style="flex:none"><button class="btn primary" id="sSave" style="flex:none">Save</button><button class="btn" id="sTest" style="flex:none">Send test</button></div>
         <div class="hint" id="tzInfo"></div>
+      </div>
+      <div class="card" style="max-width:640px">
+        <h2>Global environment variables</h2>
+        <div class="hint">Passed to every script, on every run. A script's own variable with the same name overrides these. One KEY=value per line; lines starting with # are ignored. Stored as plain text in the database, and anyone who can open this page can read them.</div>
+        <textarea id="sGlobalEnv" class="envtext" spellcheck="false" autocomplete="off" placeholder="API_KEY=abc123&#10;BASE_URL=http://192.168.1.10:8080"></textarea>
+        <div class="row" style="flex:none"><button class="btn primary" id="sGlobalSave" style="flex:none">Save</button></div>
       </div>
       <div class="card" style="max-width:640px">
         <h2>AI client (MCP)</h2>

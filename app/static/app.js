@@ -193,10 +193,16 @@ function watch(runId) {
     showNext();
   });
 }
+let globalNames = [];
+const envNames = text => text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+  .map(l => (l.startsWith('export ') ? l.slice(7).trimStart() : l).split('=')[0].trim()).filter(k => /^[A-Za-z_]\w*$/.test(k));
 function countEnv() {
   const n = $('#fEnv').value.split('\n').filter(l => l.trim() && !l.trim().startsWith('#')).length;
   $('#envCount').textContent = n || '';
   $('#envCount').style.display = n ? '' : 'none';
+  const own = new Set(envNames($('#fEnv').value));
+  $('#envGlobal').textContent = globalNames.length
+    ? 'From global: ' + globalNames.map(k => own.has(k) ? `${k} (overridden here)` : k).join(', ') : '';
 }
 $('#fEnv').oninput = countEnv;
 
@@ -314,6 +320,7 @@ $('#aptIn').onkeydown = e => { if (e.key === 'Enter') $('#aptBtn').click(); };
 async function loadSettings() {
   const s = await api('/settings');
   $('#sNtfy').value = s.ntfy_url;
+  $('#sGlobalEnv').value = s.global_env;
   $('#tzInfo').textContent = 'Schedules use timezone: ' + s.timezone;
   renderMcp(await api('/mcp'));
 }
@@ -344,8 +351,15 @@ document.querySelectorAll('[data-copy]').forEach(b => b.onclick = e => { e.preve
 const saveSettings = () => api('/settings', 'PUT', {ntfy_url: $('#sNtfy').value});
 $('#sSave').onclick = guard(async () => { await saveSettings(); toast('Settings saved'); });
 $('#sTest').onclick = guard(async () => { await saveSettings(); await api('/settings/test', 'POST'); toast('Test notification sent'); });
+$('#sGlobalSave').onclick = guard(async () => {
+  const text = $('#sGlobalEnv').value;
+  await api('/settings', 'PUT', {global_env: text});
+  globalNames = envNames(text);
+  countEnv();
+  toast('Global variables saved');
+});
 
-api('/settings').then(x => { tz = x.timezone; renderSched(); }).catch(() => {});
+api('/settings').then(x => { tz = x.timezone; globalNames = envNames(x.global_env || ''); renderSched(); countEnv(); }).catch(() => {});
 loadScripts().catch(e => toast(e.message, true));
 setInterval(() => {
   if (!$('#v-scripts').classList.contains('active') || curRun) return;
