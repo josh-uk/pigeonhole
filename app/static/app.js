@@ -217,12 +217,12 @@ async function setHook(method) {
 $('#hookEnable').onclick = guard(() => setHook('POST'));
 $('#hookRegen').onclick = guard(async () => { if (confirm('Make a new URL? The current one stops working.')) await setHook('POST'); });
 $('#hookDisable').onclick = guard(async () => { if (confirm('Remove the webhook URL? Anything calling it will get an error.')) await setHook('DELETE'); });
-$('#hookCopy').onclick = guard(async () => {
-  const input = $('#hookUrl');
+async function copyInput(input) {
   try { await navigator.clipboard.writeText(input.value); }
   catch { input.select(); document.execCommand('copy'); }  // plain http pages have no clipboard API
   toast('Copied');
-});
+}
+$('#hookCopy').onclick = guard(() => copyInput($('#hookUrl')));
 $('#fLang').onchange = () => {
   const old = cm.getValue();
   cm.setOption('mode', modeOf($('#fLang').value));
@@ -315,7 +315,32 @@ async function loadSettings() {
   const s = await api('/settings');
   $('#sNtfy').value = s.ntfy_url;
   $('#tzInfo').textContent = 'Schedules use timezone: ' + s.timezone;
+  renderMcp(await api('/mcp'));
 }
+
+function renderMcp(m) {
+  $('#mcpOff').style.display = m.enabled ? 'none' : '';
+  $('#mcpSet').style.display = m.enabled ? 'flex' : 'none';
+  if (!m.enabled) return;
+  const url = `${location.origin}/mcp`;
+  $('#mcpUrl').value = url;
+  $('#mcpToken').value = m.token;
+  $('#mcpCmd').value = `claude mcp add --transport http --scope user pigeonhole ${url} --header "Authorization: Bearer ${m.token}"`;
+  for (const [k, on] of Object.entries(m.permissions)) $('#mcpAllow_' + k).checked = on;
+}
+const mcpChecks = () => [...document.querySelectorAll('[id^=mcpAllow_]')];
+$('#mcpOn').onclick = guard(async () => renderMcp(await api('/mcp/token', 'POST')));
+$('#mcpRegen').onclick = guard(async () => {
+  if (confirm('Make a new token? Clients using the current one lose access until you update them.')) renderMcp(await api('/mcp/token', 'POST'));
+});
+$('#mcpDisable').onclick = guard(async () => {
+  if (confirm('Turn off MCP? Connected clients lose access.')) renderMcp(await api('/mcp/token', 'DELETE'));
+});
+mcpChecks().forEach(c => c.onchange = guard(async () => {
+  renderMcp(await api('/mcp/permissions', 'PUT', Object.fromEntries(mcpChecks().map(x => [x.id.slice(9), x.checked]))));
+  toast('Saved');
+}));
+document.querySelectorAll('[data-copy]').forEach(b => b.onclick = e => { e.preventDefault(); guard(() => copyInput($(b.dataset.copy)))(); });
 const saveSettings = () => api('/settings', 'PUT', {ntfy_url: $('#sNtfy').value});
 $('#sSave').onclick = guard(async () => { await saveSettings(); toast('Settings saved'); });
 $('#sTest').onclick = guard(async () => { await saveSettings(); await api('/settings/test', 'POST'); toast('Test notification sent'); });

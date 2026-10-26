@@ -81,7 +81,12 @@ tr.click{cursor:pointer}tr.click:hover,tr.sel{background:var(--panel2)}
 .hist{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
 .hist .tbl{overflow:auto;max-height:45%;flex:none}
 .hist .console{flex:1;border-radius:0;border:0;border-top:1px solid var(--line);height:auto;min-height:150px}
-label.f{display:flex;flex-direction:column;gap:4px;color:var(--dim);font-size:13px}
+label.f,div.f{display:flex;flex-direction:column;gap:4px;color:var(--dim);font-size:13px}
+.mcp{display:none;flex-direction:column;gap:10px}
+.mcp input[readonly]{font:12.5px ui-monospace,Menlo,Consolas,monospace}
+.checks{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:2px}
+.checks label{display:flex;align-items:center;gap:6px;color:var(--text)}
+code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);padding:1px 4px;border-radius:4px}
 #toast{position:fixed;bottom:16px;right:16px;background:var(--panel2);border:1px solid var(--line);padding:10px 14px;border-radius:8px;display:none;max-width:360px}
 </style>
 </head>
@@ -198,6 +203,26 @@ label.f{display:flex;flex-direction:column;gap:4px;color:var(--dim);font-size:13
         <label class="f">ntfy topic URL<input type="url" id="sNtfy" placeholder="https://ntfy.sh/my-topic"></label>
         <div class="row" style="flex:none"><button class="btn primary" id="sSave" style="flex:none">Save</button><button class="btn" id="sTest" style="flex:none">Send test</button></div>
         <div class="hint" id="tzInfo"></div>
+      </div>
+      <div class="card" style="max-width:640px">
+        <h2>AI client (MCP)</h2>
+        <div class="hint">Let Claude Code, Claude Desktop or another MCP client list, write, run and fix scripts here, using that client's own account. Off until you turn it on, and every request needs the token below.</div>
+        <div id="mcpOff"><button class="btn primary" id="mcpOn">Turn on</button></div>
+        <div id="mcpSet" class="mcp">
+          <label class="f">Server URL<div class="row"><input type="text" id="mcpUrl" readonly><button class="btn" data-copy="#mcpUrl">Copy</button></div></label>
+          <label class="f">Token<div class="row"><input type="text" id="mcpToken" readonly><button class="btn" data-copy="#mcpToken">Copy</button></div></label>
+          <div class="f">Allow the client to (reading scripts, runs and logs is always allowed)
+            <div class="checks">
+              <label><input type="checkbox" id="mcpAllow_write"> Create and change scripts</label>
+              <label><input type="checkbox" id="mcpAllow_run"> Run and stop scripts</label>
+              <label><input type="checkbox" id="mcpAllow_packages"> Install packages</label>
+              <label><input type="checkbox" id="mcpAllow_delete"> Delete scripts</label>
+            </div>
+          </div>
+          <label class="f">Add to Claude Code<div class="row"><input type="text" id="mcpCmd" readonly><button class="btn" data-copy="#mcpCmd">Copy</button></div></label>
+          <div class="hint">Other clients: add a Streamable HTTP server with the URL above and the header <code>Authorization: Bearer &lt;token&gt;</code>. Use an address the client can reach, such as this server's LAN IP and port. Anyone with the token can run code here, so keep it private and press New token if it leaks.</div>
+          <div class="row" style="flex:none"><button class="btn" id="mcpRegen" style="flex:none">New token</button><button class="btn danger" id="mcpDisable" style="flex:none">Turn off</button></div>
+        </div>
       </div>
     </div>
   </section>

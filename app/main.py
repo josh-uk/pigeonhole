@@ -13,13 +13,16 @@ import time
 import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
 DATA = Path(os.environ.get("DATA_DIR", "/data"))
@@ -111,6 +114,12 @@ def script_path(row) -> Path:
 def get_setting(key: str, default: str = "") -> str:
     r = db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     return r["value"] if r else default
+
+
+def set_setting(key: str, value: str):
+    db.execute("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+               (key, value))
+    db.commit()
 
 
 def child_env() -> dict:
@@ -391,7 +400,8 @@ async def lifespan(app: FastAPI):
                if not await asyncio.to_thread(apt_installed, r["name"])]
     if missing and shutil_which("apt-get"):
         start_job("restore apt packages", apt_argv("install", missing))
-    yield
+    async with mcp_server.session_manager.run():
+        yield
     scheduler.shutdown(wait=False)
 
 
@@ -660,9 +670,7 @@ async def write_settings(s: Settings):
     if s.ntfy_url.strip() and not s.ntfy_url.strip().startswith(("http://", "https://")):
         raise HTTPException(400, "ntfy URL must start with http:// or https://")
     for k, v in s.model_dump().items():
-        db.execute("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                   (k, v.strip()))
-    db.commit()
+        set_setting(k, v.strip())
     return {"ok": True}
 
 
@@ -672,6 +680,344 @@ async def test_notification():
     if error:
         raise HTTPException(502, error)
     return {"ok": True}
+
+
+# ----------------------------------------------------------------------- MCP
+# An MCP server at /mcp lets an AI client (Claude Code, Claude Desktop, ...) list, write, run and fix
+# scripts with the person's own account. It is off until a token is created in Settings, every
+# request must carry that token, and switches in Settings limit what the client may change.
+MCP_PERMISSIONS = {"write": "1", "run": "1", "packages": "0", "delete": "0"}  # defaults
+MCP_WAIT_MAX = 600  # longest a tool call waits for a run or install to finish
+MCP_INSTRUCTIONS = f"""Pigeonhole stores, runs and schedules Python and bash scripts on a self-hosted server.
+
+How scripts run:
+- Python scripts run with Python 3 in a shared virtualenv; add libraries with install_packages(manager="pip"). \
+Bash scripts run with bash. System tools (ffmpeg, jq, ...) come from install_packages(manager="apt").
+- Scripts run as an unprivileged user with {WORK_DIR} as the working directory. Keep files a script needs \
+between runs under the directory in the PIGEONHOLE_DATA environment variable.
+- Put settings and secrets in the script's environment variables with set_env_vars, never in the code. You can \
+see variable names but never their values; ask the user for a value rather than guessing it.
+- Print progress while the script works; the output streams live to the user. Exit with a non-zero code on \
+failure: that marks the run as failed and alerts the user.
+- Schedules are 5-field cron expressions in the server's timezone ({TZ}). A script with an empty schedule only \
+runs when started.
+
+Working style:
+- After writing or changing a script, run it with run_script and read the output; fix it and run it again until \
+it works. For scripts that change or delete things, give them a dry-run mode and run that first.
+- Only set a schedule, delete a script or install packages when the user asks for it.
+- The user can turn some actions off in Pigeonhole's Settings. If a tool says an action is turned off, tell the \
+user instead of retrying."""
+
+mcp_server = FastMCP(
+    "Pigeonhole", instructions=MCP_INSTRUCTIONS, stateless_http=True, json_response=True,
+    # requests are authenticated by a bearer token, so Host/Origin pinning (meant for unauthenticated
+    # localhost servers) is not needed, and it would reject LAN addresses and reverse proxies
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
+mcp_server.streamable_http_app()  # creates mcp_server.session_manager; requests reach it via McpEndpoint
+READ_ONLY = ToolAnnotations(readOnlyHint=True)
+
+
+def mcp_allowed(perm: str) -> bool:
+    return get_setting(f"mcp_allow_{perm}", MCP_PERMISSIONS[perm]) == "1"
+
+
+def mcp_require(perm: str, what: str):
+    if not mcp_allowed(perm):
+        raise ValueError(f"{what} from an AI client is turned off in Pigeonhole's Settings.")
+
+
+async def api_call(coro):
+    """Await one of the HTTP API handlers, turning its HTTP errors into tool errors."""
+    try:
+        return await coro
+    except HTTPException as e:
+        raise ValueError(e.detail) from None
+
+
+def script_row(sid: int):
+    row = db.execute("SELECT * FROM scripts WHERE id=?", (sid,)).fetchone()
+    if not row:
+        raise ValueError(f"there is no script with id {sid}")
+    return row
+
+
+def iso(ts: Optional[float]) -> Optional[str]:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts else None
+
+
+def env_names(text: str) -> list[str]:
+    try:
+        return list(parse_env(text))
+    except ValueError:
+        return []
+
+
+def script_info(row, with_content: bool = False) -> dict:
+    d = {"id": row["id"], "name": row["name"], "language": row["language"], "schedule": row["schedule"],
+         "schedule_enabled": bool(row["enabled"]), "next_run": iso(next_run(row["id"]) if row["enabled"] else None),
+         "timeout_seconds": row["timeout"], "env_vars": env_names(row["env"]),
+         "webhook": bool(row["hook_token"]), "running_run_id": RUNNING_SCRIPTS.get(row["id"])}
+    last = db.execute("SELECT status FROM runs WHERE script_id=? AND status!='running' ORDER BY id DESC LIMIT 1",
+                      (row["id"],)).fetchone()
+    d["last_status"] = last["status"] if last else None
+    if with_content:
+        d["content"] = row["content"]
+    return d
+
+
+def run_output(rid: int, tail: int) -> str:
+    s = STREAMS.get(rid)
+    text = "".join(s.chunks) if s else (log_path(rid).read_text(errors="replace") if log_path(rid).exists() else "")
+    return text if len(text) <= tail else "[... earlier output cut ...]\n" + text[-tail:]
+
+
+def run_info(rid: int, output: bool = False, tail: int = 12000) -> dict:
+    r = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
+    if not r:
+        raise ValueError(f"there is no run with id {rid}")
+    d = {"run_id": r["id"], "script_id": r["script_id"], "title": r["title"], "trigger": r["trigger"],
+         "status": r["status"], "exit_code": r["exit_code"], "started": iso(r["started"]),
+         "seconds": round((r["finished"] or time.time()) - r["started"], 1)}
+    if output:
+        d["output"] = run_output(rid, max(1000, min(tail, 100000)))
+    return d
+
+
+async def wait_for_run(rid: int, seconds: float):
+    deadline = time.monotonic() + max(0, min(seconds, MCP_WAIT_MAX))
+    while time.monotonic() < deadline:
+        r = db.execute("SELECT status FROM runs WHERE id=?", (rid,)).fetchone()
+        if not r or r["status"] != "running":
+            return
+        await asyncio.sleep(0.5)
+
+
+def env_quote(value: str) -> str:
+    if value != value.strip() or (len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'"):
+        q = "'" if '"' in value else '"'
+        return f"{q}{value}{q}"
+    return value
+
+
+def edit_env(text: str, set_vars: dict[str, str], unset: list[str]) -> str:
+    """Set or remove variables in a script's KEY=value text, keeping its other lines and comments."""
+    for key in [*set_vars, *unset]:
+        if not ENV_NAME.match(key):
+            raise ValueError(f"{key!r} is not a valid variable name (letters, digits and _, not starting with a digit)")
+    for key, value in set_vars.items():
+        if any(c in value for c in "\r\n\0"):
+            raise ValueError(f"the value for {key} contains a line break or null byte, which can't be stored")
+    out, done = [], set()
+    for line in text.replace("\r\n", "\n").split("\n"):
+        s = line.strip()
+        key = None
+        if s and not s.startswith("#"):
+            key = (s[7:].lstrip() if s.startswith("export ") else s).partition("=")[0].strip()
+        if key in unset or (key in set_vars and key in done):
+            continue
+        if key in set_vars:
+            out.append(f"{key}={env_quote(set_vars[key])}")
+            done.add(key)
+        else:
+            out.append(line)
+    out += [f"{k}={env_quote(v)}" for k, v in set_vars.items() if k not in done]
+    result = "\n".join(out).strip("\n")
+    parsed = parse_env(result)
+    for k, v in set_vars.items():
+        if parsed.get(k) != v:
+            raise ValueError(f"the value for {k} can't be stored exactly (it may contain a line break)")
+    return result
+
+
+@mcp_server.tool(name="list_scripts", annotations=READ_ONLY)
+async def mcp_list_scripts() -> dict[str, Any]:
+    """List every script with its schedule, environment variable names and last run status."""
+    return {"scripts": [script_info(r) for r in db.execute("SELECT * FROM scripts ORDER BY name COLLATE NOCASE")]}
+
+
+@mcp_server.tool(name="get_script", annotations=READ_ONLY)
+async def mcp_get_script(script_id: int) -> dict[str, Any]:
+    """Get one script's code and settings, plus its five most recent runs."""
+    d = script_info(script_row(script_id), with_content=True)
+    d["recent_runs"] = [run_info(r["id"]) for r in
+                        db.execute("SELECT id FROM runs WHERE script_id=? ORDER BY id DESC LIMIT 5", (script_id,))]
+    return d
+
+
+@mcp_server.tool(name="create_script")
+async def mcp_create_script(name: str, content: str, language: str = "python", schedule: str = "",
+                            timeout_seconds: int = 0) -> dict[str, Any]:
+    """Create a script. language is "python" or "bash"; schedule is a 5-field cron expression or empty for
+    manual runs only; timeout_seconds 0 means no limit. Set its environment variables with set_env_vars."""
+    mcp_require("write", "Creating scripts")
+    s = ScriptIn(name=name, language=language, content=content, schedule=schedule, timeout=timeout_seconds)
+    created = await api_call(create_script(s))
+    return script_info(script_row(created["id"]))
+
+
+@mcp_server.tool(name="update_script")
+async def mcp_update_script(script_id: int, content: Optional[str] = None, name: Optional[str] = None,
+                            language: Optional[str] = None, schedule: Optional[str] = None,
+                            schedule_enabled: Optional[bool] = None, timeout_seconds: Optional[int] = None) -> dict[str, Any]:
+    """Change a script. Only the fields you pass change. content replaces the whole script. schedule is a
+    5-field cron expression ("" for manual only); schedule_enabled pauses or resumes it."""
+    mcp_require("write", "Changing scripts")
+    row = script_row(script_id)
+    s = ScriptIn(name=row["name"] if name is None else name,
+                 language=row["language"] if language is None else language,
+                 content=row["content"] if content is None else content,
+                 schedule=row["schedule"] if schedule is None else schedule,
+                 enabled=bool(row["enabled"]) if schedule_enabled is None else schedule_enabled,
+                 timeout=row["timeout"] if timeout_seconds is None else timeout_seconds,
+                 env=row["env"], hook_delay=row["hook_delay"])
+    await api_call(update_script(script_id, s))
+    return script_info(script_row(script_id))
+
+
+@mcp_server.tool(name="set_env_vars")
+async def mcp_set_env_vars(script_id: int, set: Optional[dict[str, str]] = None,
+                           unset: Optional[list[str]] = None) -> dict[str, Any]:
+    """Set and/or remove a script's environment variables (settings, API keys, URLs). Variables you don't
+    mention are kept. Values are never shown back, only the names."""
+    mcp_require("write", "Changing scripts")
+    row = script_row(script_id)
+    env = edit_env(row["env"], set or {}, unset or [])
+    db.execute("UPDATE scripts SET env=?, updated=? WHERE id=?", (env, time.time(), script_id))
+    db.commit()
+    return {"script_id": script_id, "env_vars": env_names(env)}
+
+
+@mcp_server.tool(name="delete_script", annotations=ToolAnnotations(destructiveHint=True))
+async def mcp_delete_script(script_id: int) -> dict[str, Any]:
+    """Delete a script for good, with its schedule and webhook. Only when the user asked for it."""
+    mcp_require("delete", "Deleting scripts")
+    script_row(script_id)
+    await api_call(delete_script(script_id))
+    return {"deleted": script_id}
+
+
+@mcp_server.tool(name="run_script")
+async def mcp_run_script(script_id: int, wait_seconds: int = 120) -> dict[str, Any]:
+    """Start a script and wait up to wait_seconds (max 600) for it to finish. Returns the run's status, exit
+    code and the end of its output. If it is still running, follow it with get_run."""
+    mcp_require("run", "Running scripts")
+    script_row(script_id)
+    try:
+        rid = start_script(script_id, "mcp")
+    except HTTPException as e:
+        if e.status_code == 409:
+            raise ValueError(f"the script is already running as run {RUNNING_SCRIPTS.get(script_id)}; "
+                             "follow it with get_run") from None
+        raise ValueError(e.detail) from None
+    await wait_for_run(rid, wait_seconds)
+    return run_info(rid, output=True)
+
+
+@mcp_server.tool(name="get_run", annotations=READ_ONLY)
+async def mcp_get_run(run_id: int, wait_seconds: int = 0, tail_chars: int = 12000) -> dict[str, Any]:
+    """Get a run's status and the end of its output (tail_chars characters, 1000-100000). wait_seconds
+    (max 600) waits for a running run to finish first."""
+    await wait_for_run(run_id, wait_seconds)
+    return run_info(run_id, output=True, tail=tail_chars)
+
+
+@mcp_server.tool(name="list_runs", annotations=READ_ONLY)
+async def mcp_list_runs(script_id: Optional[int] = None, limit: int = 20) -> dict[str, Any]:
+    """List recent runs, newest first, for one script or for everything (including package installs)."""
+    q, args = "SELECT id FROM runs", []
+    if script_id is not None:
+        q += " WHERE script_id=?"
+        args.append(script_id)
+    rows = db.execute(q + " ORDER BY id DESC LIMIT ?", (*args, max(1, min(limit, 100))))
+    return {"runs": [run_info(r["id"]) for r in rows]}
+
+
+@mcp_server.tool(name="stop_run")
+async def mcp_stop_run(run_id: int) -> dict[str, Any]:
+    """Stop a running script."""
+    mcp_require("run", "Stopping runs")
+    await api_call(stop_run(run_id))
+    await wait_for_run(run_id, 10)
+    return run_info(run_id)
+
+
+@mcp_server.tool(name="list_packages", annotations=READ_ONLY)
+async def mcp_list_packages() -> dict[str, Any]:
+    """List the Python packages in the shared virtualenv and the system packages installed through Pigeonhole."""
+    return {"pip": [f"{p['name']}=={p['version']}" for p in await pip_list()],
+            "apt": [p["name"] + ("" if p["installed"] else " (not installed)") for p in await apt_list()]}
+
+
+@mcp_server.tool(name="install_packages")
+async def mcp_install_packages(manager: str, packages: list[str]) -> dict[str, Any]:
+    """Install packages: manager "pip" for Python libraries (shared by all Python scripts), "apt" for system
+    tools such as ffmpeg or jq. Waits up to 10 minutes and returns the install output."""
+    mcp_require("packages", "Installing packages")
+    if manager not in ("pip", "apt"):
+        raise ValueError('manager must be "pip" or "apt"')
+    p = Packages(packages=" ".join(packages))
+    started = await api_call(pip_install(p) if manager == "pip" else apt_install(p))
+    await wait_for_run(started["run_id"], MCP_WAIT_MAX)
+    return run_info(started["run_id"], output=True)
+
+
+class McpEndpoint:
+    """ASGI endpoint for /mcp: checks the token, then hands the request to the MCP server."""
+
+    async def __call__(self, scope, receive, send):
+        token = get_setting("mcp_token")
+        if not token:
+            response = JSONResponse({"detail": "MCP is turned off. Turn it on in Pigeonhole's Settings."}, 404)
+            return await response(scope, receive, send)
+        auth = dict(scope.get("headers") or []).get(b"authorization", b"").decode("latin-1")
+        given = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+        if not given or not secrets.compare_digest(given.encode(), token.encode()):
+            response = JSONResponse({"detail": "missing or wrong MCP token"}, 401, headers={"WWW-Authenticate": "Bearer"})
+            return await response(scope, receive, send)
+        await mcp_server.session_manager.handle_request(scope, receive, send)
+
+
+for _path in ("/mcp", "/mcp/"):
+    app.router.add_route(_path, McpEndpoint(), include_in_schema=False)
+
+
+class McpPermissions(BaseModel):
+    write: bool = True
+    run: bool = True
+    packages: bool = False
+    delete: bool = False
+
+
+def mcp_status() -> dict:
+    token = get_setting("mcp_token")
+    return {"enabled": bool(token), "token": token, "permissions": {p: mcp_allowed(p) for p in MCP_PERMISSIONS}}
+
+
+@app.get("/api/mcp")
+async def read_mcp():
+    return mcp_status()
+
+
+@app.post("/api/mcp/token")
+async def create_mcp_token():
+    """Turn MCP on, or replace the token (clients using the old one lose access)."""
+    set_setting("mcp_token", secrets.token_urlsafe(32))
+    return mcp_status()
+
+
+@app.delete("/api/mcp/token")
+async def delete_mcp_token():
+    set_setting("mcp_token", "")
+    return mcp_status()
+
+
+@app.put("/api/mcp/permissions")
+async def write_mcp_permissions(p: McpPermissions):
+    for k, v in p.model_dump().items():
+        set_setting(f"mcp_allow_{k}", "1" if v else "0")
+    return mcp_status()
 
 
 @app.get("/")
