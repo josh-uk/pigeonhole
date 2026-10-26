@@ -21,6 +21,7 @@ Write Python and bash in the browser, run them with live output, and put them on
 - **Run history.** Every run (manual, scheduled or package install) keeps its log, exit code and duration.
 - **Environment variables per script.** Give a script API keys, URLs and other settings from the editor (one `KEY=value` per line) instead of hard-coding them. They are passed to every run, manual or scheduled.
 - **Webhook triggers.** Give a script a URL that anything able to send a POST can call to start it. Calls that arrive close together are batched into one run.
+- **Write scripts with an AI client.** A built-in MCP server lets Claude Code, Claude Desktop or another MCP client create, run and fix scripts here, using that client's own account.
 - **Install what your scripts need.** Add Python packages with pip and system packages with apt (ffmpeg, jq, imagemagick and so on) from the UI. apt packages are remembered and put back if the container is recreated.
 - **Failure alerts** to your [ntfy](https://ntfy.sh) topic when a script fails or times out.
 - **Per-script timeouts** and an overlap guard, so a scheduled script never runs on top of itself.
@@ -117,6 +118,36 @@ Anything that can send a `POST` or `PUT` can call it: an app's webhook settings,
 
 > [!WARNING]
 > The token in the URL is the only protection on a webhook, and anyone who has the URL can start the script. Treat it like a password: keep it on a trusted network, and press **New URL** if it leaks. **Remove** deletes it. The token is also visible to anyone who can open the UI, and appears in the container's request log.
+
+## AI clients (MCP)
+
+Pigeonhole has a built-in [MCP](https://modelcontextprotocol.io) server, so an AI client can write a script, save it here, run it, read the output and fix it until it works. The client does the thinking with its own account; Pigeonhole only provides the tools.
+
+Open **Settings**, find **AI client (MCP)** and press **Turn on**. You get a server URL (`http://<server>:8080/mcp`) and a token. In Claude Code, copy the command shown there, which looks like:
+
+```bash
+claude mcp add --transport http --scope user pigeonhole http://<server>:8080/mcp --header "Authorization: Bearer <token>"
+```
+
+Other clients: add a Streamable HTTP server with that URL and the header `Authorization: Bearer <token>`. Use an address the client can reach, such as the server's LAN IP and port.
+
+The tools:
+
+| Tool | What it does |
+|------|--------------|
+| `list_scripts`, `get_script` | Read scripts, their schedules, environment variable names and recent runs |
+| `create_script`, `update_script` | Write or change a script, its schedule and timeout |
+| `set_env_vars` | Set or remove a script's environment variables. Values can be set but are never shown back, only the names |
+| `run_script`, `get_run`, `list_runs`, `stop_run` | Start a run and wait for its output, follow or stop it, list past runs |
+| `list_packages`, `install_packages` | See and install pip and apt packages |
+| `delete_script` | Delete a script |
+
+The client is also told how scripts run here (working directory, `PIGEONHOLE_DATA`, environment variables for settings and secrets, exit codes for alerts), so what it writes fits from the start. Runs it starts show `mcp` as their trigger in History.
+
+Switches in Settings limit what a client may change: creating and changing scripts and running them are on by default, installing packages and deleting scripts are off. Reading is always allowed while MCP is on. Most clients also ask you to approve each tool call.
+
+> [!WARNING]
+> A client with the token can run code in the container, as a person using the UI can. Keep the token private, use MCP on a trusted network, and press **New token** if it leaks; **Turn off** disables MCP entirely. The token is visible to anyone who can open the UI.
 
 ## Development
 
