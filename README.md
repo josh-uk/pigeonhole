@@ -22,6 +22,7 @@ Write Python and bash in the browser, run them with live output, and put them on
 - **Environment variables per script.** Give a script API keys, URLs and other settings from the editor (one `KEY=value` per line) instead of hard-coding them. They are passed to every run, manual or scheduled.
 - **Global environment variables.** Set values every script needs (a shared API key, a base URL) once in Settings instead of copying them into each script. A script's own variable of the same name overrides the global one.
 - **Webhook triggers.** Give a script a URL that anything able to send a POST can call to start it. Calls that arrive close together are batched into one run.
+- **Chain scripts.** Optionally start another script when one finishes, on success, on failure or either way, so a cleanup can be followed by a report without timing two schedules.
 - **Write scripts with an AI client.** A built-in MCP server lets Claude Code, Claude Desktop or another MCP client create, run and fix scripts here, using that client's own account.
 - **Install what your scripts need.** Add Python packages with pip and system packages with apt (ffmpeg, jq, imagemagick and so on) from the UI. apt packages are remembered and put back if the container is recreated.
 - **Failure alerts** to your [ntfy](https://ntfy.sh) topic when a script fails or times out.
@@ -121,6 +122,15 @@ Anything that can send a `POST` or `PUT` can call it: an app's webhook settings,
 > [!WARNING]
 > The token in the URL is the only protection on a webhook, and anyone who has the URL can start the script. Treat it like a password: keep it on a trusted network, and press **New URL** if it leaks. **Remove** deletes it. The token is also visible to anyone who can open the UI, and appears in the container's request log.
 
+## Chaining scripts
+
+Open a script and expand **After this script**. Choose when (it succeeds, it fails or times out, or either way) and which script to run, then press **Save**. Chaining is off until you pick a script.
+
+- The next script starts as soon as this one finishes, and shows `chain` as its trigger in History. It can have its own next script, so you can build a longer chain.
+- A run you stop never starts the next script.
+- If the next script is already running, it runs once more when that run finishes.
+- Loops (a script that leads back to itself) are refused when you save. Deleting a script clears it from any script that ran it next.
+
 ## AI clients (MCP)
 
 Pigeonhole has a built-in [MCP](https://modelcontextprotocol.io) server, so an AI client can write a script, save it here, run it, read the output and fix it until it works. The client does the thinking with its own account; Pigeonhole only provides the tools.
@@ -138,7 +148,7 @@ The tools:
 | Tool | What it does |
 |------|--------------|
 | `list_scripts`, `get_script` | Read scripts, their schedules, environment variable names and recent runs |
-| `create_script`, `update_script` | Write or change a script, its schedule and timeout |
+| `create_script`, `update_script` | Write or change a script, its schedule, timeout and the script to run after it |
 | `set_env_vars` | Set or remove a script's environment variables. Values can be set but are never shown back, only the names |
 | `run_script`, `get_run`, `list_runs`, `stop_run` | Start a run and wait for its output, follow or stop it, list past runs |
 | `list_packages`, `install_packages` | See and install pip and apt packages |

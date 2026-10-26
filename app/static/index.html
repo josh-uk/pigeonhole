@@ -164,6 +164,18 @@ code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddin
             <div class="hint">POST to this URL to start the script. Calls close together are batched into one run, and calls that arrive during a run trigger one more run afterwards. Use an address the sender can reach (your server's LAN IP and port, not an external URL). Anyone with this URL can start the script, so keep it on your LAN.</div>
           </div>
         </details>
+        <details class="envbox" id="chainBox">
+          <summary>After this script <span class="badge" id="chainBadge">on</span></summary>
+          <div class="hookrow">
+            <label>When it <select id="fChainOn">
+              <option value="success">succeeds</option>
+              <option value="failure">fails or times out</option>
+              <option value="always">finishes either way</option>
+            </select></label>
+            <label>run <select id="fChainNext"></select></label>
+          </div>
+          <div class="hint">Starts another script when this one finishes (Save to apply). A run you stop never starts it. If that script is already running, it runs once more when it finishes. Loops are not allowed.</div>
+        </details>
         <div class="cm-wrap"><textarea id="code"></textarea></div>
         <div class="split">
           <div class="hd"><b>Output</b><span id="runStatus"></span><span style="flex:1"></span>

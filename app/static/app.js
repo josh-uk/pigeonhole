@@ -148,14 +148,29 @@ async function loadScripts() {
 function renderList() {
   $('#scriptList').innerHTML = scripts.map(s => `<div class="item ${cur && cur.id === s.id ? 'active' : ''}" data-id="${s.id}">
     <span class="dot ${s.last_status || ''}"></span>
-    <div class="meta"><span class="name">${esc(s.name)}</span>${s.schedule ? `<span class="sub ${s.enabled ? '' : 'paused'}" title="cron: ${esc(s.schedule)}">${s.enabled ? '' : 'Paused - '}${esc(describeCron(s.schedule))}</span>` : ''}</div>
+    <div class="meta"><span class="name">${esc(s.name)}</span>${s.schedule ? `<span class="sub ${s.enabled ? '' : 'paused'}" title="cron: ${esc(s.schedule)}">${s.enabled ? '' : 'Paused - '}${esc(describeCron(s.schedule))}</span>` : ''}${chainLabel(s)}</div>
     <span class="badge">${s.language === 'python' ? 'py' : 'sh'}</span></div>`).join('')
     || '<div class="hint" style="padding:12px">No scripts yet.</div>';
   document.querySelectorAll('.item').forEach(i => i.onclick = () => select(+i.dataset.id));
 }
+const CHAIN_WORDS = {success: 'Then', failure: 'If it fails', always: 'Afterwards'};
+function chainLabel(s) {
+  const next = s.chain_next && scripts.find(x => x.id === s.chain_next);
+  return next ? `<span class="sub">${CHAIN_WORDS[s.chain_on] || 'Then'}: ${esc(next.name)}</span>` : '';
+}
+function renderChain() {
+  const next = cur.chain_next || 0;
+  $('#fChainNext').innerHTML = '<option value="0">nothing</option>' + scripts.filter(s => s.id !== cur.id)
+    .map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  $('#fChainNext').value = next;
+  $('#fChainOn').value = cur.chain_on || 'success';
+  chainBadge();
+}
+function chainBadge() { $('#chainBadge').style.display = +$('#fChainNext').value ? '' : 'none'; }
+$('#fChainNext').onchange = chainBadge;
 function select(id) {
   cur = id === 'new'
-    ? {id: null, name: '', language: 'python', content: templates.python, schedule: '', enabled: true, timeout: 0, env: '', hook_token: '', hook_delay: 60}
+    ? {id: null, name: '', language: 'python', content: templates.python, schedule: '', enabled: true, timeout: 0, env: '', hook_token: '', hook_delay: 60, chain_next: 0, chain_on: 'success'}
     : scripts.find(s => s.id === id);
   if (!cur) return;
   $('#noScript').style.display = 'none';
@@ -167,6 +182,7 @@ function select(id) {
   $('#envBox').open = !!(cur.env || '').trim();
   $('#fHookDelay').value = cur.hook_delay ?? 60; renderHook();
   $('#hookBox').open = !!cur.hook_token;
+  renderChain(); $('#chainBox').open = !!cur.chain_next;
   cm.setOption('mode', modeOf(cur.language)); cm.setValue(cur.content); cm.clearHistory();
   setTimeout(() => cm.refresh(), 0);
   $('#delBtn').style.display = cur.id ? '' : 'none';
@@ -241,12 +257,13 @@ async function save() {
     name: $('#fName').value, language: $('#fLang').value, content: cm.getValue(), schedule: cronFromSched(sched),
     enabled: $('#fEnabled').checked, timeout: +$('#fTimeout').value || 0, env: $('#fEnv').value,
     hook_delay: $('#fHookDelay').value === '' ? 60 : +$('#fHookDelay').value,
+    chain_next: +$('#fChainNext').value, chain_on: $('#fChainOn').value,
   };
   try {
     const s = cur.id ? await api('/scripts/' + cur.id, 'PUT', body) : await api('/scripts', 'POST', body);
     await loadScripts();
     cur = scripts.find(x => x.id === s.id);
-    renderList(); showNext(); renderHook();
+    renderList(); showNext(); renderHook(); renderChain();
     $('#delBtn').style.display = '';
     toast('Saved');
     return s.id;

@@ -69,7 +69,9 @@ db.executescript(
 _columns = {r["name"] for r in db.execute("PRAGMA table_info(scripts)")}
 for _name, _ddl in (("env", "TEXT NOT NULL DEFAULT ''"),
                     ("hook_token", "TEXT NOT NULL DEFAULT ''"),
-                    ("hook_delay", "INTEGER NOT NULL DEFAULT 60")):
+                    ("hook_delay", "INTEGER NOT NULL DEFAULT 60"),
+                    ("chain_next", "INTEGER NOT NULL DEFAULT 0"),
+                    ("chain_on", "TEXT NOT NULL DEFAULT 'success'")):
     if _name not in _columns:
         db.execute(f"ALTER TABLE scripts ADD COLUMN {_name} {_ddl}")
 db.commit()
@@ -262,6 +264,7 @@ def start_script(script_id: int, trigger: str) -> int:
         finally:
             RUNNING_SCRIPTS.pop(script_id, None)
             hook_finished(script_id)
+        chain_finished(script_id, status)
         if status in ("failed", "timeout"):
             await asyncio.to_thread(notify_failure, row["name"], status, run_id)
 
@@ -374,6 +377,35 @@ def hook_finished(script_id: int):
         hook_arm(script_id, row["hook_delay"])
 
 
+# ------------------------------------------------------------------ chaining
+# A script can name another to start when it finishes (chain_next, 0 for none), on success, on
+# failure or either way (chain_on). A stopped run never starts the next one. Loops are refused when
+# a script is saved, so a chain always ends.
+CHAIN_WHEN = {
+    "success": lambda status: status == "success",
+    "failure": lambda status: status in ("failed", "timeout"),
+    "always": lambda status: status != "stopped",
+}
+CHAIN_AGAIN: set[int] = set()  # chained scripts that were already running when their turn came
+
+
+def chain_start(script_id: int):
+    try:
+        start_script(script_id, "chain")
+    except HTTPException as e:
+        if e.status_code == 409:  # already running: run it once more when that run finishes
+            CHAIN_AGAIN.add(script_id)
+
+
+def chain_finished(script_id: int, status: str):
+    if script_id in CHAIN_AGAIN:
+        CHAIN_AGAIN.discard(script_id)
+        chain_start(script_id)
+    row = db.execute("SELECT chain_next, chain_on FROM scripts WHERE id=?", (script_id,)).fetchone()
+    if row and row["chain_next"] and CHAIN_WHEN.get(row["chain_on"], CHAIN_WHEN["success"])(status):
+        chain_start(row["chain_next"])
+
+
 # ------------------------------------------------------------------- startup
 def apt_installed(name: str) -> bool:
     try:
@@ -424,9 +456,11 @@ class ScriptIn(BaseModel):
     timeout: int = 0
     env: str = ""
     hook_delay: int = 60
+    chain_next: int = 0
+    chain_on: str = "success"
 
 
-def validate(s: ScriptIn):
+def validate(s: ScriptIn, sid: Optional[int] = None):
     if s.language not in ("python", "bash"):
         raise HTTPException(400, "language must be python or bash")
     if not s.name.strip():
@@ -443,6 +477,28 @@ def validate(s: ScriptIn):
             CronTrigger.from_crontab(s.schedule, timezone=TZ)
         except ValueError as e:
             raise HTTPException(400, f"invalid cron expression: {e}")
+    if s.chain_on not in CHAIN_WHEN:
+        raise HTTPException(400, "chain_on must be success, failure or always")
+    if s.chain_next:
+        validate_chain(s, sid)
+
+
+def validate_chain(s: ScriptIn, sid: Optional[int]):
+    """Refuse a next script that doesn't exist, or one whose own chain leads back here."""
+    if s.chain_next == sid:
+        raise HTTPException(400, "a script can't run itself next")
+    names, seen, nxt = [s.name.strip()], {sid}, s.chain_next
+    while nxt:
+        row = db.execute("SELECT id, name, chain_next FROM scripts WHERE id=?", (nxt,)).fetchone()
+        if not row:
+            if nxt == s.chain_next:
+                raise HTTPException(400, "the script to run next doesn't exist")
+            break
+        names.append(row["name"])
+        if row["id"] in seen:
+            raise HTTPException(400, f"that would make a loop: {' → '.join(names)}")
+        seen.add(row["id"])
+        nxt = row["chain_next"]
 
 
 def script_dict(r, with_content=True):
@@ -466,8 +522,10 @@ async def list_scripts():
 @app.post("/api/scripts")
 async def create_script(s: ScriptIn):
     validate(s)
-    cur = db.execute("INSERT INTO scripts (name,language,content,schedule,enabled,timeout,env,hook_delay,updated) VALUES (?,?,?,?,?,?,?,?,?)",
-                     (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, s.env, s.hook_delay, time.time()))
+    cur = db.execute("INSERT INTO scripts (name,language,content,schedule,enabled,timeout,env,hook_delay,chain_next,chain_on,updated) "
+                     "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                     (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, s.env, s.hook_delay,
+                      s.chain_next, s.chain_on, time.time()))
     db.commit()
     sync_schedule()
     return script_dict(db.execute("SELECT * FROM scripts WHERE id=?", (cur.lastrowid,)).fetchone())
@@ -475,12 +533,13 @@ async def create_script(s: ScriptIn):
 
 @app.put("/api/scripts/{sid}")
 async def update_script(sid: int, s: ScriptIn):
-    validate(s)
     if not db.execute("SELECT 1 FROM scripts WHERE id=?", (sid,)).fetchone():
         raise HTTPException(404)
-    db.execute("UPDATE scripts SET name=?,language=?,content=?,schedule=?,enabled=?,timeout=?,env=?,hook_delay=?,updated=? WHERE id=?",
+    validate(s, sid)
+    db.execute("UPDATE scripts SET name=?,language=?,content=?,schedule=?,enabled=?,timeout=?,env=?,hook_delay=?,"
+               "chain_next=?,chain_on=?,updated=? WHERE id=?",
                (s.name.strip(), s.language, s.content, s.schedule, int(s.enabled), s.timeout, s.env, s.hook_delay,
-                time.time(), sid))
+                s.chain_next, s.chain_on, time.time(), sid))
     db.commit()
     sync_schedule()
     return script_dict(db.execute("SELECT * FROM scripts WHERE id=?", (sid,)).fetchone())
@@ -492,8 +551,10 @@ async def delete_script(sid: int):
     if row:
         script_path(row).unlink(missing_ok=True)
     db.execute("DELETE FROM scripts WHERE id=?", (sid,))
+    db.execute("UPDATE scripts SET chain_next=0 WHERE chain_next=?", (sid,))  # scripts that ran it next run nothing
     db.commit()
     hook_clear(sid)
+    CHAIN_AGAIN.discard(sid)
     sync_schedule()
     return {"ok": True}
 
@@ -717,7 +778,9 @@ runs when started.
 Working style:
 - After writing or changing a script, run it with run_script and read the output; fix it and run it again until \
 it works. For scripts that change or delete things, give them a dry-run mode and run that first.
-- Only set a schedule, delete a script or install packages when the user asks for it.
+- A script can start another when it finishes (next_script_id and next_when on create_script and \
+update_script), for example a report after a cleanup. Loops are refused.
+- Only set a schedule, chain scripts, delete a script or install packages when the user asks for it.
 - The user can turn some actions off in Pigeonhole's Settings. If a tool says an action is turned off, tell the \
 user instead of retrying."""
 
@@ -770,7 +833,10 @@ def script_info(row, with_content: bool = False) -> dict:
     d = {"id": row["id"], "name": row["name"], "language": row["language"], "schedule": row["schedule"],
          "schedule_enabled": bool(row["enabled"]), "next_run": iso(next_run(row["id"]) if row["enabled"] else None),
          "timeout_seconds": row["timeout"], "env_vars": env_names(row["env"]),
-         "webhook": bool(row["hook_token"]), "running_run_id": RUNNING_SCRIPTS.get(row["id"])}
+         "webhook": bool(row["hook_token"]), "running_run_id": RUNNING_SCRIPTS.get(row["id"]), "next_script": None}
+    if row["chain_next"]:
+        nxt = db.execute("SELECT name FROM scripts WHERE id=?", (row["chain_next"],)).fetchone()
+        d["next_script"] = {"id": row["chain_next"], "name": nxt["name"] if nxt else None, "when": row["chain_on"]}
     last = db.execute("SELECT status FROM runs WHERE script_id=? AND status!='running' ORDER BY id DESC LIMIT 1",
                       (row["id"],)).fetchone()
     d["last_status"] = last["status"] if last else None
@@ -862,11 +928,15 @@ async def mcp_get_script(script_id: int) -> dict[str, Any]:
 
 @mcp_server.tool(name="create_script")
 async def mcp_create_script(name: str, content: str, language: str = "python", schedule: str = "",
-                            timeout_seconds: int = 0) -> dict[str, Any]:
+                            timeout_seconds: int = 0, next_script_id: int = 0,
+                            next_when: str = "success") -> dict[str, Any]:
     """Create a script. language is "python" or "bash"; schedule is a 5-field cron expression or empty for
-    manual runs only; timeout_seconds 0 means no limit. Set its environment variables with set_env_vars."""
+    manual runs only; timeout_seconds 0 means no limit. next_script_id starts that script when this one
+    finishes (0 for none), when next_when is "success", "failure" or "always". Set its environment variables
+    with set_env_vars."""
     mcp_require("write", "Creating scripts")
-    s = ScriptIn(name=name, language=language, content=content, schedule=schedule, timeout=timeout_seconds)
+    s = ScriptIn(name=name, language=language, content=content, schedule=schedule, timeout=timeout_seconds,
+                 chain_next=next_script_id, chain_on=next_when)
     created = await api_call(create_script(s))
     return script_info(script_row(created["id"]))
 
@@ -874,9 +944,11 @@ async def mcp_create_script(name: str, content: str, language: str = "python", s
 @mcp_server.tool(name="update_script")
 async def mcp_update_script(script_id: int, content: Optional[str] = None, name: Optional[str] = None,
                             language: Optional[str] = None, schedule: Optional[str] = None,
-                            schedule_enabled: Optional[bool] = None, timeout_seconds: Optional[int] = None) -> dict[str, Any]:
+                            schedule_enabled: Optional[bool] = None, timeout_seconds: Optional[int] = None,
+                            next_script_id: Optional[int] = None, next_when: Optional[str] = None) -> dict[str, Any]:
     """Change a script. Only the fields you pass change. content replaces the whole script. schedule is a
-    5-field cron expression ("" for manual only); schedule_enabled pauses or resumes it."""
+    5-field cron expression ("" for manual only); schedule_enabled pauses or resumes it. next_script_id starts
+    that script when this one finishes (0 for none), when next_when is "success", "failure" or "always"."""
     mcp_require("write", "Changing scripts")
     row = script_row(script_id)
     s = ScriptIn(name=row["name"] if name is None else name,
@@ -885,7 +957,9 @@ async def mcp_update_script(script_id: int, content: Optional[str] = None, name:
                  schedule=row["schedule"] if schedule is None else schedule,
                  enabled=bool(row["enabled"]) if schedule_enabled is None else schedule_enabled,
                  timeout=row["timeout"] if timeout_seconds is None else timeout_seconds,
-                 env=row["env"], hook_delay=row["hook_delay"])
+                 env=row["env"], hook_delay=row["hook_delay"],
+                 chain_next=row["chain_next"] if next_script_id is None else next_script_id,
+                 chain_on=row["chain_on"] if next_when is None else next_when)
     await api_call(update_script(script_id, s))
     return script_info(script_row(script_id))
 
