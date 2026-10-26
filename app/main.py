@@ -241,7 +241,7 @@ def new_run(title: str, trigger: str, script_id: Optional[int] = None) -> tuple[
     return cur.lastrowid, stream
 
 
-def start_script(script_id: int, trigger: str) -> int:
+def start_script(script_id: int, trigger: str, hook_bodies: Optional[list[str]] = None) -> int:
     row = db.execute("SELECT * FROM scripts WHERE id=?", (script_id,)).fetchone()
     if not row:
         raise HTTPException(404, "script not found")
@@ -255,6 +255,8 @@ def start_script(script_id: int, trigger: str) -> int:
     env = child_env()
     env.update(parse_env(get_setting("global_env")))  # global variables, then the script's own on top
     env.update(parse_env(row["env"]))
+    if trigger == "webhook":
+        env["WEBHOOK_BODIES"] = json.dumps(hook_bodies or [])
     run_id, stream = new_run(row["name"], trigger, script_id)
     RUNNING_SCRIPTS[script_id] = run_id
 
@@ -332,7 +334,10 @@ def next_run(script_id: int) -> Optional[float]:
 HOOK_TIMERS: dict[int, asyncio.TimerHandle] = {}
 HOOK_FIRST: dict[int, float] = {}  # script id -> when its oldest waiting call arrived
 HOOK_AGAIN: set[int] = set()  # script ids called while running
+HOOK_BODIES: dict[int, list[str]] = {}  # script id -> request bodies of the calls waiting to run
 HOOK_MAX_WAIT = 10  # a waiting run is held back at most this many times the quiet period
+HOOK_BODY_CHARS = 1000  # longer bodies are cut to this many characters
+HOOK_BODY_COUNT = 100  # at most this many bodies are kept for one run
 
 
 def hook_clear(script_id: int):
@@ -341,6 +346,7 @@ def hook_clear(script_id: int):
         timer.cancel()
     HOOK_FIRST.pop(script_id, None)
     HOOK_AGAIN.discard(script_id)
+    HOOK_BODIES.pop(script_id, None)
 
 
 def hook_arm(script_id: int, delay: int) -> float:
@@ -362,9 +368,9 @@ def hook_fire(script_id: int):
         HOOK_AGAIN.add(script_id)
         return
     try:
-        start_script(script_id, "webhook")
+        start_script(script_id, "webhook", HOOK_BODIES.pop(script_id, []))
     except HTTPException:  # the script was deleted while waiting
-        pass
+        HOOK_BODIES.pop(script_id, None)
 
 
 def hook_finished(script_id: int):
@@ -588,17 +594,22 @@ async def delete_hook(sid: int):
 
 @app.api_route("/api/hooks/{token}", methods=["POST", "PUT"])
 async def webhook(token: str, request: Request):
-    """Called by anything that can send a POST. The body is ignored."""
+    """Called by anything that can send a POST. A body is optional; the script receives the bodies of
+    the calls it was started for as a JSON list in WEBHOOK_BODIES."""
     row = db.execute("SELECT id, hook_delay FROM scripts WHERE hook_token=? AND hook_token!=''", (token,)).fetchone()
     if not row:
         raise HTTPException(404, "unknown webhook")
+    raw = await request.body()
     try:
-        payload = await request.json()
+        payload = json.loads(raw)
     except Exception:  # noqa: BLE001 - an empty or non-JSON body is fine
         payload = None
     if isinstance(payload, dict) and payload.get("eventType") == "Test":  # a sender's "Test" button
         return {"status": "test", "detail": "webhook reachable, script not run"}
     sid = row["id"]
+    body = raw.decode(errors="replace").strip()[:HOOK_BODY_CHARS]
+    if body and len(HOOK_BODIES.get(sid, [])) < HOOK_BODY_COUNT:
+        HOOK_BODIES.setdefault(sid, []).append(body)
     if sid in RUNNING_SCRIPTS:
         HOOK_AGAIN.add(sid)
         return {"status": "queued", "detail": "script is running, it will run once more afterwards"}
@@ -767,9 +778,9 @@ Bash scripts run with bash. System tools (ffmpeg, jq, ...) come from install_pac
 between runs under the directory in the PIGEONHOLE_DATA environment variable.
 - Put settings and secrets in the script's environment variables with set_env_vars, never in the code. You can \
 see variable names but never their values; ask the user for a value rather than guessing it.
-- Global environment variables, set by the user in Pigeonhole's Settings, are passed to every script too; a \
-script's own variable with the same name overrides them. get_script lists their names, so reuse one (for example \
-an API key) instead of asking for the value again.
+- Global environment variables, set by the user in Pigeonhole's Settings (or with set_global_env_vars), are \
+passed to every script too; a script's own variable with the same name overrides them. get_script lists their \
+names, so reuse one (for example an API key) instead of asking for the value again.
 - Print progress while the script works; the output streams live to the user. Exit with a non-zero code on \
 failure: that marks the run as failed and alerts the user.
 - Schedules are 5-field cron expressions in the server's timezone ({TZ}). A script with an empty schedule only \
@@ -780,7 +791,11 @@ Working style:
 it works. For scripts that change or delete things, give them a dry-run mode and run that first.
 - A script can start another when it finishes (next_script_id and next_when on create_script and \
 update_script), for example a report after a cleanup. Loops are refused.
-- Only set a schedule, chain scripts, delete a script or install packages when the user asks for it.
+- A script can be started by a webhook (create_webhook). The URL is a secret you never see: have it saved into \
+an environment variable with save_url_to_script_id and save_url_as. A call may carry a body, which the script \
+reads from WEBHOOK_BODIES (a JSON list).
+- Only set a schedule, chain scripts, create or delete webhooks, delete a script or install packages when the \
+user asks for it.
 - The user can turn some actions off in Pigeonhole's Settings. If a tool says an action is turned off, tell the \
 user instead of retrying."""
 
@@ -975,6 +990,105 @@ async def mcp_set_env_vars(script_id: int, set: Optional[dict[str, str]] = None,
     db.execute("UPDATE scripts SET env=?, updated=? WHERE id=?", (env, time.time(), script_id))
     db.commit()
     return {"script_id": script_id, "env_vars": env_names(env)}
+
+
+@mcp_server.tool(name="set_global_env_vars")
+async def mcp_set_global_env_vars(set: Optional[dict[str, str]] = None,
+                                  unset: Optional[list[str]] = None) -> dict[str, Any]:
+    """Set and/or remove global environment variables, which every script receives (a script's own variable of
+    the same name overrides them). Variables you don't mention are kept. Values are never shown back, only the
+    names (get_script lists them as global_env_vars)."""
+    mcp_require("write", "Changing global variables")
+    env = edit_env(get_setting("global_env"), set or {}, unset or [])
+    set_setting("global_env", env.rstrip())
+    return {"global_env_vars": env_names(env)}
+
+
+def store_hook_url(sid: int, url_base: str, target_id: int, var_name: str) -> dict:
+    """Write the script's full webhook URL into an environment variable of another script (or the same one),
+    so the secret URL never has to pass through the AI client."""
+    if not (url_base and target_id and var_name):
+        raise ValueError("to save the URL, pass url_base, save_url_to_script_id and save_url_as together")
+    base = url_base.strip().rstrip("/")
+    if not re.match(r"^https?://[^\s/]+(/\S*)?$", base):
+        raise ValueError("url_base must be an address like http://192.168.1.10:8080")
+    token = script_row(sid)["hook_token"]
+    if not token:
+        raise ValueError("the script has no webhook")
+    target = script_row(target_id)
+    env = edit_env(target["env"], {var_name: f"{base}/api/hooks/{token}"}, [])
+    db.execute("UPDATE scripts SET env=?, updated=? WHERE id=?", (env, time.time(), target_id))
+    db.commit()
+    return {"script_id": target_id, "variable": var_name}
+
+
+def hook_info(sid: int) -> dict:
+    row = script_row(sid)
+    return {"script_id": sid, "webhook": bool(row["hook_token"]), "quiet_seconds": row["hook_delay"]}
+
+
+def set_quiet(sid: int, quiet_seconds: int):
+    if not 0 <= quiet_seconds <= 3600:
+        raise ValueError("quiet_seconds must be between 0 and 3600")
+    db.execute("UPDATE scripts SET hook_delay=?, updated=? WHERE id=?", (quiet_seconds, time.time(), sid))
+    db.commit()
+
+
+@mcp_server.tool(name="create_webhook")
+async def mcp_create_webhook(script_id: int, quiet_seconds: Optional[int] = None, url_base: str = "",
+                             save_url_to_script_id: int = 0, save_url_as: str = "") -> dict[str, Any]:
+    """Give a script a webhook URL that starts it when called, or replace its URL (the old one stops working).
+    The URL is a secret and is never returned. To use it, pass url_base (an address the caller can reach, such as
+    http://192.168.1.10:8080) with save_url_to_script_id and save_url_as to store the full URL in an environment
+    variable of a script. quiet_seconds (0-3600, default 60) is how long calls must stay quiet before the script
+    runs; 0 runs straight away. A call may carry a body, which the script receives in WEBHOOK_BODIES."""
+    mcp_require("write", "Changing webhooks")
+    script_row(script_id)
+    if quiet_seconds is not None and not 0 <= quiet_seconds <= 3600:
+        raise ValueError("quiet_seconds must be between 0 and 3600")
+    if save_url_as or save_url_to_script_id or url_base:
+        if not (url_base and save_url_to_script_id and save_url_as):
+            raise ValueError("to save the URL, pass url_base, save_url_to_script_id and save_url_as together")
+        script_row(save_url_to_script_id)
+        edit_env("", {save_url_as: ""}, [])  # rejects a bad variable name before anything changes
+    await api_call(create_hook(script_id))
+    if quiet_seconds is not None:
+        set_quiet(script_id, quiet_seconds)
+    d = hook_info(script_id)
+    if url_base:
+        d["url_saved_to"] = store_hook_url(script_id, url_base, save_url_to_script_id, save_url_as)
+    return d
+
+
+@mcp_server.tool(name="update_webhook")
+async def mcp_update_webhook(script_id: int, quiet_seconds: Optional[int] = None, url_base: str = "",
+                             save_url_to_script_id: int = 0, save_url_as: str = "") -> dict[str, Any]:
+    """Change a script's existing webhook without replacing its URL: set quiet_seconds (0-3600), and/or store the
+    current URL in an environment variable of a script (url_base, save_url_to_script_id and save_url_as, as in
+    create_webhook). The URL itself is never returned."""
+    mcp_require("write", "Changing webhooks")
+    if not script_row(script_id)["hook_token"]:
+        raise ValueError("the script has no webhook; use create_webhook")
+    if quiet_seconds is not None and not 0 <= quiet_seconds <= 3600:
+        raise ValueError("quiet_seconds must be between 0 and 3600")
+    saved = None
+    if url_base or save_url_to_script_id or save_url_as:
+        saved = store_hook_url(script_id, url_base, save_url_to_script_id, save_url_as)
+    if quiet_seconds is not None:
+        set_quiet(script_id, quiet_seconds)
+    d = hook_info(script_id)
+    if saved:
+        d["url_saved_to"] = saved
+    return d
+
+
+@mcp_server.tool(name="delete_webhook", annotations=ToolAnnotations(destructiveHint=True))
+async def mcp_delete_webhook(script_id: int) -> dict[str, Any]:
+    """Remove a script's webhook URL. Anything still calling it gets an error. Only when the user asked for it."""
+    mcp_require("delete", "Deleting webhooks")
+    script_row(script_id)
+    await api_call(delete_hook(script_id))
+    return hook_info(script_id)
 
 
 @mcp_server.tool(name="delete_script", annotations=ToolAnnotations(destructiveHint=True))
