@@ -251,6 +251,7 @@ def start_script(script_id: int, trigger: str) -> int:
     path.write_text(row["content"].replace("\r\n", "\n"))
     argv = [str(VENV_BIN / "python"), "-u", str(path)] if row["language"] == "python" else ["bash", str(path)]
     env = child_env()
+    env.update(parse_env(get_setting("global_env")))  # global variables, then the script's own on top
     env.update(parse_env(row["env"]))
     run_id, stream = new_run(row["name"], trigger, script_id)
     RUNNING_SCRIPTS[script_id] = run_id
@@ -657,20 +658,28 @@ async def apt_remove(p: Packages):
 
 # ------------------------------------------------------------------ settings
 class Settings(BaseModel):
-    ntfy_url: str = ""
+    # fields left out of a request are not changed
+    ntfy_url: Optional[str] = None
+    global_env: Optional[str] = None
 
 
 @app.get("/api/settings")
 async def read_settings():
-    return {"ntfy_url": get_setting("ntfy_url"), "timezone": TZ}
+    return {"ntfy_url": get_setting("ntfy_url"), "global_env": get_setting("global_env"), "timezone": TZ}
 
 
 @app.put("/api/settings")
 async def write_settings(s: Settings):
-    if s.ntfy_url.strip() and not s.ntfy_url.strip().startswith(("http://", "https://")):
-        raise HTTPException(400, "ntfy URL must start with http:// or https://")
-    for k, v in s.model_dump().items():
-        set_setting(k, v.strip())
+    if s.ntfy_url is not None:
+        if s.ntfy_url.strip() and not s.ntfy_url.strip().startswith(("http://", "https://")):
+            raise HTTPException(400, "ntfy URL must start with http:// or https://")
+        set_setting("ntfy_url", s.ntfy_url.strip())
+    if s.global_env is not None:
+        try:
+            parse_env(s.global_env)
+        except ValueError as e:
+            raise HTTPException(400, f"global environment variables: {e}")
+        set_setting("global_env", s.global_env.rstrip())
     return {"ok": True}
 
 
@@ -697,6 +706,9 @@ Bash scripts run with bash. System tools (ffmpeg, jq, ...) come from install_pac
 between runs under the directory in the PIGEONHOLE_DATA environment variable.
 - Put settings and secrets in the script's environment variables with set_env_vars, never in the code. You can \
 see variable names but never their values; ask the user for a value rather than guessing it.
+- Global environment variables, set by the user in Pigeonhole's Settings, are passed to every script too; a \
+script's own variable with the same name overrides them. get_script lists their names, so reuse one (for example \
+an API key) instead of asking for the value again.
 - Print progress while the script works; the output streams live to the user. Exit with a non-zero code on \
 failure: that marks the run as failed and alerts the user.
 - Schedules are 5-field cron expressions in the server's timezone ({TZ}). A script with an empty schedule only \
@@ -839,8 +851,10 @@ async def mcp_list_scripts() -> dict[str, Any]:
 
 @mcp_server.tool(name="get_script", annotations=READ_ONLY)
 async def mcp_get_script(script_id: int) -> dict[str, Any]:
-    """Get one script's code and settings, plus its five most recent runs."""
+    """Get one script's code and settings, plus its five most recent runs. global_env_vars lists the global
+    variables every script receives; env_vars are the script's own, which win over globals of the same name."""
     d = script_info(script_row(script_id), with_content=True)
+    d["global_env_vars"] = env_names(get_setting("global_env"))
     d["recent_runs"] = [run_info(r["id"]) for r in
                         db.execute("SELECT id FROM runs WHERE script_id=? ORDER BY id DESC LIMIT 5", (script_id,))]
     return d

@@ -20,6 +20,7 @@ Write Python and bash in the browser, run them with live output, and put them on
 - **Human-friendly scheduling.** Pick "Every 5 minutes", "Weekdays at 08:00" or "Monthly on day 1" from a builder, or drop to raw cron when you need to. The script list shows each schedule in plain English.
 - **Run history.** Every run (manual, scheduled or package install) keeps its log, exit code and duration.
 - **Environment variables per script.** Give a script API keys, URLs and other settings from the editor (one `KEY=value` per line) instead of hard-coding them. They are passed to every run, manual or scheduled.
+- **Global environment variables.** Set values every script needs (a shared API key, a base URL) once in Settings instead of copying them into each script. A script's own variable of the same name overrides the global one.
 - **Webhook triggers.** Give a script a URL that anything able to send a POST can call to start it. Calls that arrive close together are batched into one run.
 - **Write scripts with an AI client.** A built-in MCP server lets Claude Code, Claude Desktop or another MCP client create, run and fix scripts here, using that client's own account.
 - **Install what your scripts need.** Add Python packages with pip and system packages with apt (ffmpeg, jq, imagemagick and so on) from the UI. apt packages are remembered and put back if the container is recreated.
@@ -93,7 +94,8 @@ docker compose up -d --build
 - The container starts as root just long enough to map the `pigeonhole` user to `PUID`/`PGID` and fix ownership of `/data`, then drops to that user. The app and every script run unprivileged; only `apt-get` is allowed through `sudo`.
 - Python scripts run with the virtualenv's interpreter, so anything you install on the **Packages** page is importable straight away.
 - Scripts can find the data directory via the `PIGEONHOLE_DATA` environment variable.
-- Per-script environment variables are stored as plain text in the database (`/data/pigeonhole.db`), next to the script, and are visible to anyone who can open the UI. They override the container's own variables of the same name. Lines starting with `#` are ignored, and values can be wrapped in quotes.
+- Environment variables, per script and global, are stored as plain text in the database (`/data/pigeonhole.db`) and are visible to anyone who can open the UI. Lines starting with `#` are ignored, and values can be wrapped in quotes.
+- A run's environment is built in layers, each overriding the one before: the container's own variables, then the global variables from **Settings**, then the script's own. The editor lists the global names a script inherits and marks any it overrides.
 - Schedules use standard 5-field cron. Weekly schedules are stored with day names (`mon,wed,fri`).
 
 ## Notifications
