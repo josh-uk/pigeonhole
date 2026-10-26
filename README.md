@@ -160,11 +160,13 @@ The tools:
 | `set_env_vars` | Set or remove a script's environment variables. Values can be set but are never shown back, only the names |
 | `run_script`, `get_run`, `list_runs`, `stop_run` | Start a run and wait for its output, follow or stop it, list past runs |
 | `list_packages`, `install_packages` | See and install pip and apt packages |
+| `create_webhook`, `update_webhook` | Give a script a webhook URL (or replace it) and set its quiet period. The URL is never shown to the client; it can be saved into a script's environment variable instead |
+| `delete_webhook` | Remove a script's webhook URL |
 | `delete_script` | Delete a script |
 
 The client is also told how scripts run here (working directory, `PIGEONHOLE_DATA`, environment variables for settings and secrets, exit codes for alerts), so what it writes fits from the start. Runs it starts show `mcp` as their trigger in History.
 
-Switches in Settings limit what a client may change: creating and changing scripts and running them are on by default, installing packages and deleting scripts are off. Reading is always allowed while MCP is on. Most clients also ask you to approve each tool call.
+Switches in Settings limit what a client may change: creating and changing scripts (and their webhooks) and running them are on by default, installing packages and deleting scripts or webhooks are off. Reading is always allowed while MCP is on. Most clients also ask you to approve each tool call.
 
 > [!WARNING]
 > A client with the token can run code in the container, as a person using the UI can. Keep the token private, use MCP on a trusted network, and press **New token** if it leaks; **Turn off** disables MCP entirely. The token is visible to anyone who can open the UI.

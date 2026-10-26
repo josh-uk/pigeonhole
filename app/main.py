@@ -791,7 +791,11 @@ Working style:
 it works. For scripts that change or delete things, give them a dry-run mode and run that first.
 - A script can start another when it finishes (next_script_id and next_when on create_script and \
 update_script), for example a report after a cleanup. Loops are refused.
-- Only set a schedule, chain scripts, delete a script or install packages when the user asks for it.
+- A script can be started by a webhook (create_webhook). The URL is a secret you never see: have it saved into \
+an environment variable with save_url_to_script_id and save_url_as. A call may carry a body, which the script \
+reads from WEBHOOK_BODIES (a JSON list).
+- Only set a schedule, chain scripts, create or delete webhooks, delete a script or install packages when the \
+user asks for it.
 - The user can turn some actions off in Pigeonhole's Settings. If a tool says an action is turned off, tell the \
 user instead of retrying."""
 
@@ -986,6 +990,93 @@ async def mcp_set_env_vars(script_id: int, set: Optional[dict[str, str]] = None,
     db.execute("UPDATE scripts SET env=?, updated=? WHERE id=?", (env, time.time(), script_id))
     db.commit()
     return {"script_id": script_id, "env_vars": env_names(env)}
+
+
+def store_hook_url(sid: int, url_base: str, target_id: int, var_name: str) -> dict:
+    """Write the script's full webhook URL into an environment variable of another script (or the same one),
+    so the secret URL never has to pass through the AI client."""
+    if not (url_base and target_id and var_name):
+        raise ValueError("to save the URL, pass url_base, save_url_to_script_id and save_url_as together")
+    base = url_base.strip().rstrip("/")
+    if not re.match(r"^https?://[^\s/]+(/\S*)?$", base):
+        raise ValueError("url_base must be an address like http://192.168.1.10:8080")
+    token = script_row(sid)["hook_token"]
+    if not token:
+        raise ValueError("the script has no webhook")
+    target = script_row(target_id)
+    env = edit_env(target["env"], {var_name: f"{base}/api/hooks/{token}"}, [])
+    db.execute("UPDATE scripts SET env=?, updated=? WHERE id=?", (env, time.time(), target_id))
+    db.commit()
+    return {"script_id": target_id, "variable": var_name}
+
+
+def hook_info(sid: int) -> dict:
+    row = script_row(sid)
+    return {"script_id": sid, "webhook": bool(row["hook_token"]), "quiet_seconds": row["hook_delay"]}
+
+
+def set_quiet(sid: int, quiet_seconds: int):
+    if not 0 <= quiet_seconds <= 3600:
+        raise ValueError("quiet_seconds must be between 0 and 3600")
+    db.execute("UPDATE scripts SET hook_delay=?, updated=? WHERE id=?", (quiet_seconds, time.time(), sid))
+    db.commit()
+
+
+@mcp_server.tool(name="create_webhook")
+async def mcp_create_webhook(script_id: int, quiet_seconds: Optional[int] = None, url_base: str = "",
+                             save_url_to_script_id: int = 0, save_url_as: str = "") -> dict[str, Any]:
+    """Give a script a webhook URL that starts it when called, or replace its URL (the old one stops working).
+    The URL is a secret and is never returned. To use it, pass url_base (an address the caller can reach, such as
+    http://192.168.1.10:8080) with save_url_to_script_id and save_url_as to store the full URL in an environment
+    variable of a script. quiet_seconds (0-3600, default 60) is how long calls must stay quiet before the script
+    runs; 0 runs straight away. A call may carry a body, which the script receives in WEBHOOK_BODIES."""
+    mcp_require("write", "Changing webhooks")
+    script_row(script_id)
+    if quiet_seconds is not None and not 0 <= quiet_seconds <= 3600:
+        raise ValueError("quiet_seconds must be between 0 and 3600")
+    if save_url_as or save_url_to_script_id or url_base:
+        if not (url_base and save_url_to_script_id and save_url_as):
+            raise ValueError("to save the URL, pass url_base, save_url_to_script_id and save_url_as together")
+        script_row(save_url_to_script_id)
+        edit_env("", {save_url_as: ""}, [])  # rejects a bad variable name before anything changes
+    await api_call(create_hook(script_id))
+    if quiet_seconds is not None:
+        set_quiet(script_id, quiet_seconds)
+    d = hook_info(script_id)
+    if url_base:
+        d["url_saved_to"] = store_hook_url(script_id, url_base, save_url_to_script_id, save_url_as)
+    return d
+
+
+@mcp_server.tool(name="update_webhook")
+async def mcp_update_webhook(script_id: int, quiet_seconds: Optional[int] = None, url_base: str = "",
+                             save_url_to_script_id: int = 0, save_url_as: str = "") -> dict[str, Any]:
+    """Change a script's existing webhook without replacing its URL: set quiet_seconds (0-3600), and/or store the
+    current URL in an environment variable of a script (url_base, save_url_to_script_id and save_url_as, as in
+    create_webhook). The URL itself is never returned."""
+    mcp_require("write", "Changing webhooks")
+    if not script_row(script_id)["hook_token"]:
+        raise ValueError("the script has no webhook; use create_webhook")
+    if quiet_seconds is not None and not 0 <= quiet_seconds <= 3600:
+        raise ValueError("quiet_seconds must be between 0 and 3600")
+    saved = None
+    if url_base or save_url_to_script_id or save_url_as:
+        saved = store_hook_url(script_id, url_base, save_url_to_script_id, save_url_as)
+    if quiet_seconds is not None:
+        set_quiet(script_id, quiet_seconds)
+    d = hook_info(script_id)
+    if saved:
+        d["url_saved_to"] = saved
+    return d
+
+
+@mcp_server.tool(name="delete_webhook", annotations=ToolAnnotations(destructiveHint=True))
+async def mcp_delete_webhook(script_id: int) -> dict[str, Any]:
+    """Remove a script's webhook URL. Anything still calling it gets an error. Only when the user asked for it."""
+    mcp_require("delete", "Deleting webhooks")
+    script_row(script_id)
+    await api_call(delete_hook(script_id))
+    return hook_info(script_id)
 
 
 @mcp_server.tool(name="delete_script", annotations=ToolAnnotations(destructiveHint=True))
