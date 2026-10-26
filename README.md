@@ -25,6 +25,7 @@ Write Python and bash in the browser, run them with live output, and put them on
 - **Chain scripts.** Optionally start another script when one finishes, on success, on failure or either way, so a cleanup can be followed by a report without timing two schedules.
 - **Write scripts with an AI client.** A built-in MCP server lets Claude Code, Claude Desktop or another MCP client create, run and fix scripts here, using that client's own account.
 - **Install what your scripts need.** Add Python packages with pip and system packages with apt (ffmpeg, jq, imagemagick and so on) from the UI. apt packages are remembered and put back if the container is recreated.
+- **Back up your scripts.** One button in Settings downloads every script as a `.py` or `.sh` file in a zip, with a manifest of their schedules. Environment variables are left out.
 - **Failure alerts** to your [ntfy](https://ntfy.sh) topic when a script fails or times out.
 - **Per-script timeouts** and an overlap guard, so a scheduled script never runs on top of itself.
 
@@ -98,6 +99,12 @@ docker compose up -d --build
 - Environment variables, per script and global, are stored as plain text in the database (`/data/pigeonhole.db`) and are visible to anyone who can open the UI. Lines starting with `#` are ignored, and values can be wrapped in quotes.
 - A run's environment is built in layers, each overriding the one before: the container's own variables, then the global variables from **Settings**, then the script's own. The editor lists the global names a script inherits and marks any it overrides.
 - Schedules use standard 5-field cron. Weekly schedules are stored with day names (`mon,wed,fri`).
+
+## Backing up scripts
+
+**Settings → Back up scripts → Download all scripts (zip)** (or `GET /api/export`) gives you a zip with one file per script (`.py` or `.sh`, named after the script) and a `pigeonhole.json` manifest. The manifest lists each script's name, language, schedule, whether it is paused, timeout, the script that runs next and the webhook quiet period.
+
+Environment variables (global and per script), webhook URLs, the MCP token and run history are **not** included, so the zip contains no secrets and is safe to keep in Git or a cloud folder. After a restore you set the variables again and press **Create webhook URL** for any script that had one.
 
 ## Notifications
 
