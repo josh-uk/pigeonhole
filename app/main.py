@@ -241,7 +241,7 @@ def new_run(title: str, trigger: str, script_id: Optional[int] = None) -> tuple[
     return cur.lastrowid, stream
 
 
-def start_script(script_id: int, trigger: str) -> int:
+def start_script(script_id: int, trigger: str, hook_bodies: Optional[list[str]] = None) -> int:
     row = db.execute("SELECT * FROM scripts WHERE id=?", (script_id,)).fetchone()
     if not row:
         raise HTTPException(404, "script not found")
@@ -255,6 +255,8 @@ def start_script(script_id: int, trigger: str) -> int:
     env = child_env()
     env.update(parse_env(get_setting("global_env")))  # global variables, then the script's own on top
     env.update(parse_env(row["env"]))
+    if trigger == "webhook":
+        env["WEBHOOK_BODIES"] = json.dumps(hook_bodies or [])
     run_id, stream = new_run(row["name"], trigger, script_id)
     RUNNING_SCRIPTS[script_id] = run_id
 
@@ -332,7 +334,10 @@ def next_run(script_id: int) -> Optional[float]:
 HOOK_TIMERS: dict[int, asyncio.TimerHandle] = {}
 HOOK_FIRST: dict[int, float] = {}  # script id -> when its oldest waiting call arrived
 HOOK_AGAIN: set[int] = set()  # script ids called while running
+HOOK_BODIES: dict[int, list[str]] = {}  # script id -> request bodies of the calls waiting to run
 HOOK_MAX_WAIT = 10  # a waiting run is held back at most this many times the quiet period
+HOOK_BODY_CHARS = 1000  # longer bodies are cut to this many characters
+HOOK_BODY_COUNT = 100  # at most this many bodies are kept for one run
 
 
 def hook_clear(script_id: int):
@@ -341,6 +346,7 @@ def hook_clear(script_id: int):
         timer.cancel()
     HOOK_FIRST.pop(script_id, None)
     HOOK_AGAIN.discard(script_id)
+    HOOK_BODIES.pop(script_id, None)
 
 
 def hook_arm(script_id: int, delay: int) -> float:
@@ -362,9 +368,9 @@ def hook_fire(script_id: int):
         HOOK_AGAIN.add(script_id)
         return
     try:
-        start_script(script_id, "webhook")
+        start_script(script_id, "webhook", HOOK_BODIES.pop(script_id, []))
     except HTTPException:  # the script was deleted while waiting
-        pass
+        HOOK_BODIES.pop(script_id, None)
 
 
 def hook_finished(script_id: int):
@@ -588,17 +594,22 @@ async def delete_hook(sid: int):
 
 @app.api_route("/api/hooks/{token}", methods=["POST", "PUT"])
 async def webhook(token: str, request: Request):
-    """Called by anything that can send a POST. The body is ignored."""
+    """Called by anything that can send a POST. A body is optional; the script receives the bodies of
+    the calls it was started for as a JSON list in WEBHOOK_BODIES."""
     row = db.execute("SELECT id, hook_delay FROM scripts WHERE hook_token=? AND hook_token!=''", (token,)).fetchone()
     if not row:
         raise HTTPException(404, "unknown webhook")
+    raw = await request.body()
     try:
-        payload = await request.json()
+        payload = json.loads(raw)
     except Exception:  # noqa: BLE001 - an empty or non-JSON body is fine
         payload = None
     if isinstance(payload, dict) and payload.get("eventType") == "Test":  # a sender's "Test" button
         return {"status": "test", "detail": "webhook reachable, script not run"}
     sid = row["id"]
+    body = raw.decode(errors="replace").strip()[:HOOK_BODY_CHARS]
+    if body and len(HOOK_BODIES.get(sid, [])) < HOOK_BODY_COUNT:
+        HOOK_BODIES.setdefault(sid, []).append(body)
     if sid in RUNNING_SCRIPTS:
         HOOK_AGAIN.add(sid)
         return {"status": "queued", "detail": "script is running, it will run once more afterwards"}

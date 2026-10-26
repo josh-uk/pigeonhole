@@ -105,7 +105,7 @@ Open **Settings**, paste your ntfy topic URL (for example `https://ntfy.sh/my-to
 
 ## Webhooks
 
-Open a script, expand **Webhook trigger** and press **Create webhook URL** (save a new script first). You get a URL like `http://<server>:8080/api/hooks/<token>`; a `POST` (or `PUT`) to it starts the script. The request body is ignored, and a run started this way shows `webhook` as its trigger in History.
+Open a script, expand **Webhook trigger** and press **Create webhook URL** (save a new script first). You get a URL like `http://<server>:8080/api/hooks/<token>`; a `POST` (or `PUT`) to it starts the script. A run started this way shows `webhook` as its trigger in History.
 
 ```bash
 curl -X POST http://localhost:8080/api/hooks/<token>
@@ -116,6 +116,14 @@ Calls are batched rather than run one by one, which matters when something sends
 - The script runs once the calls have been quiet for the **quiet period** (60 seconds by default, set it next to the URL and press Save; `0` runs straight away). A steady stream cannot hold a run back for more than ten times the quiet period.
 - Calls that arrive **while the script is running** trigger one more run after it finishes, again after a quiet period.
 - Waiting calls are kept in memory only, so a restart of the container forgets them. Keep a scheduled run as a safety net for anything that matters.
+
+A body is optional. When the call has one, the script receives it in the `WEBHOOK_BODIES` environment variable, a JSON list with the body of every call the run was started for (in order, each cut to 1000 characters, at most 100). A call with no body adds nothing, and the variable is `[]` when no call had a body. It is only set for runs started by a webhook. This lets one webhook carry a choice, for example an action button in a notification that posts the name of the thing to act on:
+
+```python
+import json, os
+for name in json.loads(os.environ.get("WEBHOOK_BODIES", "[]")):
+    print("asked to handle", name)
+```
 
 Anything that can send a `POST` or `PUT` can call it: an app's webhook settings, a CI job, a cron entry on another machine, or `curl`. A request whose JSON body has `"eventType": "Test"` (the test button of many apps) is answered with a 200 without running the script. Use an address the sender can reach, such as the server's LAN IP and port.
 
