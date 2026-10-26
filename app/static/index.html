@@ -243,6 +243,9 @@ code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddin
             </div>
           </div>
           <label class="f">Add to Claude Code<div class="row"><input type="text" id="mcpCmd" readonly><button class="btn" data-copy="#mcpCmd">Copy</button></div></label>
+          <label class="f">Add to GitHub Copilot CLI<div class="row"><input type="text" id="mcpCopilot" readonly><button class="btn" data-copy="#mcpCopilot">Copy</button></div></label>
+          <label class="f">Add to Claude Desktop (under mcpServers in claude_desktop_config.json; needs Node.js)<div class="row"><textarea class="envtext" id="mcpDesktop" style="height:230px" readonly spellcheck="false"></textarea><button class="btn" data-copy="#mcpDesktop">Copy</button></div></label>
+          <label class="f">Add to Codex (CLI, desktop app and IDE extension share ~/.codex/config.toml)<div class="row"><textarea class="envtext" id="mcpCodex" style="height:70px" readonly spellcheck="false"></textarea><button class="btn" data-copy="#mcpCodex">Copy</button></div></label>
           <div class="hint">Other clients: add a Streamable HTTP server with the URL above and the header <code>Authorization: Bearer &lt;token&gt;</code>. Use an address the client can reach, such as this server's LAN IP and port. Anyone with the token can run code here, so keep it private and press New token if it leaks.</div>
           <div class="row" style="flex:none"><button class="btn" id="mcpRegen" style="flex:none">New token</button><button class="btn danger" id="mcpDisable" style="flex:none">Turn off</button></div>
         </div>

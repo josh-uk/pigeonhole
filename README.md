@@ -149,6 +149,8 @@ Open **Settings**, find **AI client (MCP)** and press **Turn on**. You get a ser
 claude mcp add --transport http --scope user pigeonhole http://<server>:8080/mcp --header "Authorization: Bearer <token>"
 ```
 
+The section also has ready-made entries for GitHub Copilot CLI (a `copilot mcp add` command), Claude Desktop (an entry for `claude_desktop_config.json` that uses [mcp-remote](https://github.com/geelen/mcp-remote), so it needs Node.js) and Codex (a block for `~/.codex/config.toml`, shared by the Codex CLI, desktop app and IDE extension). They are built from the same URL and token.
+
 Other clients: add a Streamable HTTP server with that URL and the header `Authorization: Bearer <token>`. Use an address the client can reach, such as the server's LAN IP and port.
 
 The tools:
