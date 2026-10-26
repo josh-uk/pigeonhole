@@ -158,6 +158,7 @@ The tools:
 | `list_scripts`, `get_script` | Read scripts, their schedules, environment variable names and recent runs |
 | `create_script`, `update_script` | Write or change a script, its schedule, timeout and the script to run after it |
 | `set_env_vars` | Set or remove a script's environment variables. Values can be set but are never shown back, only the names |
+| `set_global_env_vars` | Set or remove the global environment variables every script receives. Same rule: values are never shown back |
 | `run_script`, `get_run`, `list_runs`, `stop_run` | Start a run and wait for its output, follow or stop it, list past runs |
 | `list_packages`, `install_packages` | See and install pip and apt packages |
 | `create_webhook`, `update_webhook` | Give a script a webhook URL (or replace it) and set its quiet period. The URL is never shown to the client; it can be saved into a script's environment variable instead |

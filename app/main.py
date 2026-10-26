@@ -778,9 +778,9 @@ Bash scripts run with bash. System tools (ffmpeg, jq, ...) come from install_pac
 between runs under the directory in the PIGEONHOLE_DATA environment variable.
 - Put settings and secrets in the script's environment variables with set_env_vars, never in the code. You can \
 see variable names but never their values; ask the user for a value rather than guessing it.
-- Global environment variables, set by the user in Pigeonhole's Settings, are passed to every script too; a \
-script's own variable with the same name overrides them. get_script lists their names, so reuse one (for example \
-an API key) instead of asking for the value again.
+- Global environment variables, set by the user in Pigeonhole's Settings (or with set_global_env_vars), are \
+passed to every script too; a script's own variable with the same name overrides them. get_script lists their \
+names, so reuse one (for example an API key) instead of asking for the value again.
 - Print progress while the script works; the output streams live to the user. Exit with a non-zero code on \
 failure: that marks the run as failed and alerts the user.
 - Schedules are 5-field cron expressions in the server's timezone ({TZ}). A script with an empty schedule only \
@@ -990,6 +990,18 @@ async def mcp_set_env_vars(script_id: int, set: Optional[dict[str, str]] = None,
     db.execute("UPDATE scripts SET env=?, updated=? WHERE id=?", (env, time.time(), script_id))
     db.commit()
     return {"script_id": script_id, "env_vars": env_names(env)}
+
+
+@mcp_server.tool(name="set_global_env_vars")
+async def mcp_set_global_env_vars(set: Optional[dict[str, str]] = None,
+                                  unset: Optional[list[str]] = None) -> dict[str, Any]:
+    """Set and/or remove global environment variables, which every script receives (a script's own variable of
+    the same name overrides them). Variables you don't mention are kept. Values are never shown back, only the
+    names (get_script lists them as global_env_vars)."""
+    mcp_require("write", "Changing global variables")
+    env = edit_env(get_setting("global_env"), set or {}, unset or [])
+    set_setting("global_env", env.rstrip())
+    return {"global_env_vars": env_names(env)}
 
 
 def store_hook_url(sid: int, url_base: str, target_id: int, var_name: str) -> dict:
