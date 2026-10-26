@@ -228,6 +228,11 @@ code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddin
         <div class="row" style="flex:none"><button class="btn primary" id="sGlobalSave" style="flex:none">Save</button></div>
       </div>
       <div class="card" style="max-width:640px">
+        <h2>Back up scripts</h2>
+        <div class="hint">Download every script as a file in a zip, with a <code>pigeonhole.json</code> listing each one's schedule, timeout and next script. Environment variables, webhook URLs and run history are not included.</div>
+        <div class="row" style="flex:none"><a class="btn" href="/api/export" download style="flex:none;text-decoration:none">Download all scripts (zip)</a></div>
+      </div>
+      <div class="card" style="max-width:640px">
         <h2>AI client (MCP)</h2>
         <div class="hint">Let Claude Code, Claude Desktop or another MCP client list, write, run and fix scripts here, using that client's own account. Off until you turn it on, and every request needs the token below.</div>
         <div id="mcpOff"><button class="btn primary" id="mcpOn">Turn on</button></div>

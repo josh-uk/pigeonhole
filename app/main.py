@@ -1,6 +1,7 @@
 """Pigeonhole: write, run and schedule Python/bash scripts from a web UI."""
 import asyncio
 import codecs
+import io
 import json
 import os
 import re
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -18,7 +20,7 @@ from typing import Any, Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -733,6 +735,44 @@ class Settings(BaseModel):
     # fields left out of a request are not changed
     ntfy_url: Optional[str] = None
     global_env: Optional[str] = None
+
+
+# ------------------------------------------------------------------- export
+def file_stem(name: str, taken: set[str]) -> str:
+    """A safe, unique file name (without extension) for a script's name."""
+    stem = re.sub(r"[^A-Za-z0-9._ -]+", "_", name).strip(" .") or "script"
+    stem, n = stem[:80], 1
+    while stem.lower() in taken:
+        n += 1
+        stem = f"{stem[:76]}-{n}"
+    taken.add(stem.lower())
+    return stem
+
+
+@app.get("/api/export")
+async def export_scripts():
+    """Download every script as a file in a zip, with a manifest of its settings. No environment
+    variables, webhook URLs or run history are included."""
+    rows = list(db.execute("SELECT * FROM scripts ORDER BY name COLLATE NOCASE"))
+    names = {r["id"]: r["name"] for r in rows}
+    taken, entries = set(), []
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for r in rows:
+            fname = file_stem(r["name"], taken) + (".py" if r["language"] == "python" else ".sh")
+            z.writestr(fname, r["content"].replace("\r\n", "\n"))
+            entries.append({
+                "file": fname, "name": r["name"], "language": r["language"], "schedule": r["schedule"],
+                "schedule_enabled": bool(r["enabled"]), "timeout_seconds": r["timeout"],
+                "next_script": names.get(r["chain_next"]) if r["chain_next"] else None,
+                "next_when": r["chain_on"] if r["chain_next"] else None,
+                "webhook_quiet_seconds": r["hook_delay"],
+            })
+        manifest = {"format": 1, "exported": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "scripts": entries}
+        z.writestr("pigeonhole.json", json.dumps(manifest, indent=2) + "\n")
+    name = f"pigeonhole-scripts-{time.strftime('%Y-%m-%d')}.zip"
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.get("/api/settings")
