@@ -104,6 +104,7 @@ class Stream:
 
 
 STREAMS: dict[int, Stream] = {}
+SSE_KEEPALIVE = 15  # seconds of silence before a live log sends a keep-alive comment
 RUNNING_SCRIPTS: dict[int, int] = {}  # script id -> run id
 
 
@@ -653,12 +654,20 @@ async def stream_run(rid: int):
                     break
                 async with s.cond:
                     if i >= len(s.chunks) and not s.done:
-                        await s.cond.wait()
+                        try:
+                            await asyncio.wait_for(s.cond.wait(), SSE_KEEPALIVE)
+                        except asyncio.TimeoutError:
+                            pass
+                if i >= len(s.chunks) and not s.done:
+                    yield ": keepalive\n\n"  # an SSE comment, so a proxy does not close a quiet stream
         elif log_path(rid).exists():
             yield f"data: {json.dumps(log_path(rid).read_text(errors='replace'))}\n\n"
         yield "event: done\ndata: {}\n\n"
 
-    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+    # X-Accel-Buffering stops an nginx reverse proxy (e.g. Nginx Proxy Manager) from holding the
+    # stream back until the run ends, which would leave the live output blank
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ------------------------------------------------------------------ packages
