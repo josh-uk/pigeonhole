@@ -12,12 +12,40 @@ const fmtTime = t => t ? new Date(t * 1000).toLocaleString() : '';
 const fmtDur = (a, b) => b ? ((b - a) < 60 ? (b - a).toFixed(1) + 's' : Math.floor((b - a) / 60) + 'm ' + Math.round((b - a) % 60) + 's') : '...';
 
 /* ---- streaming ---- */
+// http(s) addresses in log text become links that open in a new tab
+function linkify(text) {
+  const frag = document.createDocumentFragment();
+  let last = 0;
+  for (const m of text.matchAll(/https?:\/\/[^\s<>"'`]+/g)) {
+    const url = m[0].replace(/[.,;:!?)\]}]+$/, '');  // trailing punctuation is not part of the address
+    const a = document.createElement('a');
+    a.href = url; a.textContent = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    frag.append(text.slice(last, m.index), a);
+    last = m.index + url.length;
+  }
+  frag.append(text.slice(last));
+  return frag;
+}
+// Appends log text to pre. Complete lines are linkified; the unfinished last line stays plain text
+// until its end arrives, so an address split across two chunks still becomes one link.
+function logWriter(pre) {
+  const tail = document.createTextNode('');
+  let rest = '';
+  return text => {
+    if (!tail.isConnected) pre.append(tail);  // the output was cleared meanwhile
+    rest += text;
+    const cut = rest.lastIndexOf('\n') + 1;
+    if (cut) { tail.before(linkify(rest.slice(0, cut))); rest = rest.slice(cut); }
+    tail.textContent = rest;
+  };
+}
 function attach(runId, pre, onDone) {
   pre.textContent = '';
+  const write = logWriter(pre);
   const es = new EventSource(`/api/runs/${runId}/stream`);
   es.onmessage = e => {
     const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
-    pre.append(ansi(JSON.parse(e.data)));
+    write(ansi(JSON.parse(e.data)));
     if (stick) pre.scrollTop = pre.scrollHeight;
   };
   es.addEventListener('done', () => { es.close(); onDone && onDone(); });
