@@ -32,7 +32,7 @@ button:disabled{opacity:.5;cursor:default}
 pre.out{margin:0;background:#0d0f12;padding:10px 12px;overflow:auto;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;flex:1;min-height:0}
 .badge{font-size:11px;padding:1px 7px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);color:var(--dim)}
 .s-success{color:var(--ok)}.s-failed,.s-timeout{color:var(--bad)}.s-running{color:var(--warn)}.s-stopped{color:var(--dim)}
-.side{width:260px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column}
+.side{width:260px;max-width:60vw;flex:none;background:var(--panel);display:flex;flex-direction:column}
 .side .top{padding:10px;border-bottom:1px solid var(--line)}
 .side .top button{width:100%}
 .list{overflow:auto;flex:1}
@@ -62,9 +62,9 @@ textarea.envtext{height:140px;margin:0}
 .hookrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0 4px}
 .hookrow input[type=text]{flex:1;min-width:260px;font:12.5px ui-monospace,Menlo,Consolas,monospace}
 .hookrow label{color:var(--dim);display:flex;align-items:center;gap:5px}
-.cm-wrap{flex:1;min-height:120px;position:relative}
+.cm-wrap{flex:1;min-height:80px;position:relative}
 .CodeMirror{position:absolute;inset:0;height:auto;font-size:13px}
-.split{height:34%;min-height:100px;display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.split{height:34%;min-height:100px;display:flex;flex-direction:column}
 .hd{display:flex;gap:10px;align-items:center;padding:6px 10px;background:var(--panel);font-size:13px;color:var(--dim)}
 .empty{margin:auto;color:var(--dim)}
 .page{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:16px;min-width:0}
@@ -84,13 +84,25 @@ tr.click{cursor:pointer}tr.click:hover,tr.sel{background:var(--panel2)}
 .console{height:240px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex:none}
 .hist{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
 .hist .tbl{overflow:auto;max-height:45%;flex:none}
-.hist .console{flex:1;border-radius:0;border:0;border-top:1px solid var(--line);height:auto;min-height:150px}
+.hist .console{flex:1;border-radius:0;border:0;height:auto;min-height:100px}
 label.f,div.f{display:flex;flex-direction:column;gap:4px;color:var(--dim);font-size:13px}
 .mcp{display:none;flex-direction:column;gap:10px}
 .mcp input[readonly]{font:12.5px ui-monospace,Menlo,Consolas,monospace}
 .checks{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:2px}
 .checks label{display:flex;align-items:center;gap:6px;color:var(--text)}
 code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);padding:1px 4px;border-radius:4px}
+.gutter{flex:none;position:relative;z-index:10;background:var(--line);touch-action:none;outline:none}
+.gutter.x{width:1px;cursor:col-resize}
+.gutter.y{height:1px;cursor:row-resize}
+.gutter.x::after,.gutter.y::after{content:'';position:absolute;inset:0 -4px}
+.gutter.y::after{inset:-4px 0}
+.gutter.grip{height:12px;margin-top:-14px;background:none;cursor:row-resize}
+.gutter.grip::after{content:'';position:absolute;left:calc(50% - 20px);top:4px;width:40px;height:4px;border-radius:2px;background:var(--line)}
+.gutter.x:hover,.gutter.y:hover,.gutter.drag,.gutter:focus-visible,.gutter.grip:hover::after,.gutter.grip.drag::after,.gutter.grip:focus-visible::after{background:var(--accent)}
+.gutter.grip:hover,.gutter.grip.drag,.gutter.grip:focus-visible{background:none}
+body.resizing{user-select:none}
+body.resizing.x,body.resizing.x *{cursor:col-resize!important}
+body.resizing.y,body.resizing.y *{cursor:row-resize!important}
 #toast{position:fixed;bottom:16px;right:16px;background:var(--panel2);border:1px solid var(--line);padding:10px 14px;border-radius:8px;display:none;max-width:360px}
 </style>
 </head>
@@ -110,6 +122,7 @@ code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddin
       <div class="top"><button class="btn primary" id="newBtn">+ New script</button></div>
       <div class="list" id="scriptList"></div>
     </div>
+    <div class="gutter x" id="gSide" role="separator" tabindex="0" aria-label="Resize the script list" title="Drag to resize, double-click to reset"></div>
     <div class="editor">
       <div class="empty" id="noScript">Select or create a script</div>
       <div id="editorBody" style="display:none;flex-direction:column;flex:1;min-height:0">
@@ -177,6 +190,7 @@ code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddin
           <div class="hint">Starts another script when this one finishes (Save to apply). A run you stop never starts it. If that script is already running, it runs once more when it finishes. Loops are not allowed.</div>
         </details>
         <div class="cm-wrap"><textarea id="code"></textarea></div>
+        <div class="gutter y" id="gOut" role="separator" tabindex="0" aria-label="Resize the output" title="Drag to resize, double-click to reset"></div>
         <div class="split">
           <div class="hd"><b>Output</b><span id="runStatus"></span><span style="flex:1"></span>
             <button class="btn danger" id="stopBtn" style="display:none;padding:2px 10px">Stop</button>
@@ -190,6 +204,7 @@ code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddin
   <section class="view" id="v-history">
     <div class="hist">
       <div class="tbl"><table><thead><tr><th>#</th><th>Script / job</th><th>Trigger</th><th>Status</th><th>Started</th><th>Duration</th></tr></thead><tbody id="histBody"></tbody></table></div>
+      <div class="gutter y" id="gHist" role="separator" tabindex="0" aria-label="Resize the run list" title="Drag to resize, double-click to reset"></div>
       <div class="console"><div class="hd" id="histTitle">Select a run</div><pre class="out" id="histOut"></pre></div>
     </div>
   </section>
@@ -209,6 +224,7 @@ code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddin
         </div>
       </div>
       <div class="console"><div class="hd" id="pkgTitle">Install output</div><pre class="out" id="pkgOut"></pre></div>
+      <div class="gutter grip" id="gPkg" role="separator" tabindex="0" aria-label="Resize the install output" title="Drag to resize, double-click to reset"></div>
     </div>
   </section>
 

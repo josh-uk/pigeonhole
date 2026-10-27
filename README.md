@@ -17,6 +17,7 @@ Write Python and bash in the browser, run them with live output, and put them on
 
 - **Browser editor** for Python and bash scripts, with syntax highlighting and `Ctrl/Cmd+S` to save, `Ctrl/Cmd+Enter` to run.
 - **Live output.** Watch stdout and stderr stream in as the script runs, and stop it at any time.
+- **Resizable panes.** Drag the dividers between the script list, the editor and the output (and on the History and Packages pages) to size them the way you like. Double-click a divider to reset it. Sizes are remembered in your browser.
 - **Human-friendly scheduling.** Pick "Every 5 minutes", "Weekdays at 08:00" or "Monthly on day 1" from a builder, or drop to raw cron when you need to. The script list shows each schedule in plain English.
 - **Run history.** Every run (manual, scheduled or package install) keeps its log, exit code and duration.
 - **Environment variables per script.** Give a script API keys, URLs and other settings from the editor (one `KEY=value` per line) instead of hard-coding them. They are passed to every run, manual or scheduled.

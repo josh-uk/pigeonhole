@@ -382,6 +382,63 @@ $('#sGlobalSave').onclick = guard(async () => {
   toast('Global variables saved');
 });
 
+/* ---- resizable panes ---- */
+// Drag a divider to resize the panes on either side of it, or use the arrow keys when it has focus;
+// double-click resets it. Sizes are remembered in this browser only.
+let paneSizes = {};
+try { paneSizes = JSON.parse(localStorage.getItem('pigeonhole.panes')) || {}; } catch {}
+const savePanes = () => { try { localStorage.setItem('pigeonhole.panes', JSON.stringify(paneSizes)); } catch {} };
+// a: the pane before the divider, b: the pane after it (or none). fixed: a gets a size in pixels;
+// otherwise a and b share the space between them by ratio, so they keep their proportions when the window resizes.
+function divider(id, {a, b, axis = 'y', fixed = false, min = [80, 80], max = 0, onResize}) {
+  const g = $(id), A = $(a), B = b && $(b), dim = axis === 'x' ? 'width' : 'height';
+  g.setAttribute('aria-orientation', axis === 'x' ? 'vertical' : 'horizontal');
+  const apply = v => {
+    for (const p of [A, B]) if (p) p.style.flex = p.style[dim] = p.style.maxHeight = '';
+    if (v != null && fixed) Object.assign(A.style, {flex: 'none', [dim]: v + 'px', maxHeight: 'none'});
+    else if (v != null) { A.style.flex = `${v} 1 0`; B.style.flex = `${1 - v} 1 0`; A.style.maxHeight = B.style.maxHeight = 'none'; }
+    if (onResize) onResize();
+  };
+  // resize so that pane a is `size` pixels, given that a and b measured sa and sb when the move started
+  const resize = (sa, sb, size) => {
+    const top = B ? sa + sb - min[1] : max || innerHeight;
+    size = Math.max(min[0], Math.min(size, top));
+    paneSizes[id] = fixed ? Math.round(size) : size / (sa + sb);
+    apply(paneSizes[id]);
+    if (fixed) paneSizes[id] = Math.round(A.getBoundingClientRect()[dim]);  // CSS limits such as max-width win
+  };
+  const measure = () => [A.getBoundingClientRect()[dim], B ? B.getBoundingClientRect()[dim] : 0];
+  g.onpointerdown = e => {
+    if (e.button) return;
+    e.preventDefault();
+    g.setPointerCapture(e.pointerId);
+    g.classList.add('drag'); document.body.classList.add('resizing', axis);
+    const [sa, sb] = measure(), start = axis === 'x' ? e.clientX : e.clientY;
+    g.onpointermove = m => resize(sa, sb, sa + (axis === 'x' ? m.clientX : m.clientY) - start);
+    g.onpointerup = g.onpointercancel = () => {
+      g.onpointermove = g.onpointerup = g.onpointercancel = null;
+      g.classList.remove('drag'); document.body.classList.remove('resizing', axis);
+      savePanes();
+    };
+  };
+  g.onkeydown = e => {
+    const step = {ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1}[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const [sa, sb] = measure();
+    resize(sa, sb, sa + step * (e.shiftKey ? 80 : 20));
+    savePanes();
+  };
+  g.ondblclick = () => { delete paneSizes[id]; apply(null); savePanes(); };
+  apply(paneSizes[id] ?? null);
+}
+let cmFrame = 0;
+const refreshEditor = () => { cancelAnimationFrame(cmFrame); cmFrame = requestAnimationFrame(() => cm.refresh()); };
+divider('#gSide', {a: '#v-scripts .side', b: '#v-scripts .editor', axis: 'x', fixed: true, min: [160, 320], onResize: refreshEditor});
+divider('#gOut', {a: '#v-scripts .cm-wrap', b: '#v-scripts .split', min: [80, 100], onResize: refreshEditor});
+divider('#gHist', {a: '#v-history .tbl', b: '#v-history .console', min: [60, 100]});
+divider('#gPkg', {a: '#v-packages .console', fixed: true, min: [120, 0], max: 2000});
+
 api('/settings').then(x => { tz = x.timezone; globalNames = envNames(x.global_env || ''); renderSched(); countEnv(); }).catch(() => {});
 loadScripts().catch(e => toast(e.message, true));
 setInterval(() => {
