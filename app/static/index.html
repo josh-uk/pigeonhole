@@ -204,6 +204,7 @@ body.resizing.y,body.resizing.y *{cursor:row-resize!important}
 
   <section class="view" id="v-history">
     <div class="hist">
+      <div class="hd"><span style="flex:1">Runs</span><button class="btn danger" id="histClear" style="padding:2px 10px" disabled>Clear all</button></div>
       <div class="tbl"><table><thead><tr><th>#</th><th>Script / job</th><th>Trigger</th><th>Status</th><th>Started</th><th>Duration</th></tr></thead><tbody id="histBody"></tbody></table></div>
       <div class="gutter y" id="gHist" role="separator" tabindex="0" aria-label="Resize the run list" title="Drag to resize, double-click to reset"></div>
       <div class="console"><div class="hd" id="histTitle">Select a run</div><pre class="out" id="histOut"></pre></div>

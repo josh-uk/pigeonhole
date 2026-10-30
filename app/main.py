@@ -629,6 +629,23 @@ async def list_runs(script_id: Optional[int] = None, limit: int = 100):
     return [dict(r) for r in db.execute(q + " ORDER BY id DESC LIMIT ?", (*args, limit))]
 
 
+@app.get("/api/runs/count")
+async def count_runs():
+    r = db.execute("SELECT COUNT(*) AS n, COALESCE(SUM(status='running'), 0) AS running FROM runs").fetchone()
+    return {"past": r["n"] - r["running"], "running": r["running"]}
+
+
+@app.delete("/api/runs")
+async def clear_runs():
+    """Delete every finished run and its log. Runs still going are kept: the status check is part of
+    the DELETE itself, so a run can't change state between choosing it and removing it."""
+    rows = db.execute("DELETE FROM runs WHERE status!='running' RETURNING id").fetchall()
+    db.commit()
+    for r in rows:
+        log_path(r["id"]).unlink(missing_ok=True)
+    return {"deleted": len(rows)}
+
+
 @app.post("/api/runs/{rid}/stop")
 async def stop_run(rid: int):
     s = STREAMS.get(rid)

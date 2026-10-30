@@ -332,9 +332,25 @@ async function loadHistory() {
     histEs = attach(histSel, $('#histOut'), loadHistory);
     document.querySelectorAll('#histBody tr').forEach(x => x.classList.toggle('sel', x === tr));
   });
+  $('#histClear').disabled = !runs.some(r => r.status !== 'running');
   clearTimeout(histTimer);
   if ($('#v-history').classList.contains('active') && runs.some(r => r.status === 'running')) histTimer = setTimeout(loadHistory, 3000);
 }
+$('#histClear').onclick = guard(async () => {
+  const {past, running} = await api('/runs/count');
+  if (!past) return loadHistory();
+  const kept = running ? ` ${running} running run${running === 1 ? ' is' : 's are'} kept.` : '';
+  if (!confirm(`Delete ${past} past run${past === 1 ? '' : 's'} and their output?${kept}`)) return;
+  const {deleted} = await api('/runs', 'DELETE');
+  toast(`Deleted ${deleted} run${deleted === 1 ? '' : 's'}`);
+  await loadHistory();
+  if (histSel && !$(`#histBody tr[data-id="${histSel}"]`)) {  // the selected run was deleted
+    if (histEs) histEs.close();
+    histSel = null;
+    $('#histTitle').textContent = 'Select a run';
+    $('#histOut').textContent = '';
+  }
+});
 
 /* ---- packages ---- */
 let pkgEs = null;
