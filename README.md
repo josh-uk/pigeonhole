@@ -19,7 +19,7 @@ Write Python and bash in the browser, run them with live output, and put them on
 - **Live output.** Watch stdout and stderr stream in as the script runs, and stop it at any time.
 - **Resizable panes.** Drag the dividers between the script list, the editor and the output (and on the History and Packages pages) to size them the way you like. Double-click a divider to reset it. Sizes are remembered in your browser.
 - **Human-friendly scheduling.** Pick "Every 5 minutes", "Weekdays at 08:00" or "Monthly on day 1" from a builder, or drop to raw cron when you need to. The script list shows each schedule in plain English.
-- **Run history.** Every run (manual, scheduled or package install) keeps its log, exit code and duration.
+- **Run history.** Every run (manual, scheduled or package install) keeps its log, exit code and duration. **Clear all** on the History page deletes every finished run and its log; runs still going are kept.
 - **Environment variables per script.** Give a script API keys, URLs and other settings from the editor (one `KEY=value` per line) instead of hard-coding them. They are passed to every run, manual or scheduled.
 - **Global environment variables.** Set values every script needs (a shared API key, a base URL) once in Settings instead of copying them into each script. A script's own variable of the same name overrides the global one.
 - **Webhook triggers.** Give a script a URL that anything able to send a POST can call to start it. Calls that arrive close together are batched into one run.
@@ -188,6 +188,13 @@ Switches in Settings limit what a client may change: creating and changing scrip
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 DATA_DIR=./data uvicorn app.main:app --reload --port 8080
+```
+
+Run the tests with:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
 ```
 
 The backend is a single FastAPI app in [`app/main.py`](app/main.py) (APScheduler for cron, asyncio subprocesses for runs, SSE for live logs). The UI is plain HTML and JavaScript in [`app/static/`](app/static), with CodeMirror loaded from a CDN, so there is no build step.
