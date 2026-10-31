@@ -26,7 +26,8 @@ Write Python and bash in the browser, run them with live output, and put them on
 - **Chain scripts.** Optionally start another script when one finishes, on success, on failure or either way, so a cleanup can be followed by a report without timing two schedules.
 - **Write scripts with an AI client.** A built-in MCP server lets Claude Code, Claude Desktop or another MCP client create, run and fix scripts here, using that client's own account.
 - **Install what your scripts need.** Add Python packages with pip and system packages with apt (ffmpeg, jq, imagemagick and so on) from the UI. apt packages are remembered and put back if the container is recreated.
-- **Back up your scripts.** One button in Settings downloads every script as a `.py` or `.sh` file in a zip, with a manifest of their schedules. Environment variables are left out.
+- **Full backup.** One button in Settings (or `GET /api/backup` from a backup tool) downloads a zip with everything needed to restore the server: scripts, schedules, webhooks, settings, environment variables, package lists and the files your scripts keep in the data directory. The database is copied with SQLite's backup API, so it is consistent even while scripts are running. Run logs are optional. See [Full backup and restore](#full-backup-and-restore).
+- **Export your scripts.** One button in Settings downloads every script as a `.py` or `.sh` file in a zip, with a manifest of their schedules. Environment variables are left out.
 - **Failure alerts** to your [ntfy](https://ntfy.sh) topic when a script fails or times out.
 - **Per-script timeouts** and an overlap guard, so a scheduled script never runs on top of itself.
 
@@ -91,6 +92,7 @@ docker compose up -d --build
 | Script files as they run | `/data/scripts/` |
 | Run logs | `/data/runs/` |
 | Python packages | A shared virtualenv in `/data/venv` (survives container recreation) |
+| Python packages to reinstall after a restore | `/data/pip-requirements.txt` (only until it has been installed) |
 | System packages | Installed with apt (via `sudo`) into the container; the list is stored in the database and re-installed on startup if missing |
 | Working directory for scripts | `/data/work` |
 
@@ -101,9 +103,48 @@ docker compose up -d --build
 - A run's environment is built in layers, each overriding the one before: the container's own variables, then the global variables from **Settings**, then the script's own. The editor lists the global names a script inherits and marks any it overrides.
 - Schedules use standard 5-field cron. Weekly schedules are stored with day names (`mon,wed,fri`).
 
-## Backing up scripts
+## Full backup and restore
 
-**Settings → Back up scripts → Download all scripts (zip)** (or `GET /api/export`) gives you a zip with one file per script (`.py` or `.sh`, named after the script) and a `pigeonhole.json` manifest. The manifest lists each script's name, language, schedule, whether it is paused, timeout, the script that runs next and the webhook quiet period.
+**Settings → Full backup → Download backup** (or `GET /api/backup`) downloads `pigeonhole-backup-<date>.zip`, laid out like `/data` so it unpacks straight back into it:
+
+| In the zip | What it holds |
+|------------|---------------|
+| `pigeonhole.db` | Scripts, schedules, webhook URLs, chaining, environment variables (per script and global), settings, the MCP token, the list of apt packages and run history (without the output, unless logs are included). Copied with SQLite's online backup API, so it is a consistent snapshot even if a run is writing to the database. |
+| `pip-requirements.txt` | The Python packages in the virtualenv (`pip freeze`). |
+| Everything else in `/data` | Files your scripts keep under `PIGEONHOLE_DATA` (state files, caches you wrote yourself and so on). |
+| `runs/` | Run logs, only with **Include run logs** ticked (`GET /api/backup?logs=true`). |
+
+Left out because they are rebuilt: the virtualenv (`venv/`), the scripts' working directory (`work/`), the copies of scripts written before each run (`scripts/`), `__pycache__` folders and symlinks. The zip is streamed as it is built, so a big data folder doesn't have to fit in memory.
+
+To take backups from a backup tool, have it fetch the zip before each backup, for example in a pre-backup hook:
+
+```bash
+curl -fsS -o /path/to/backups/pigeonhole-backup.zip http://192.168.1.10:8080/api/backup
+```
+
+> [!IMPORTANT]
+> The zip contains secrets: environment variable values, webhook URLs, the ntfy URL and the MCP token. Store it somewhere private, such as an encrypted backup repository. Like the rest of Pigeonhole's API, the endpoint has no login of its own: anyone who can open the UI can download it, just as they can already read those values in the UI or run a script that reads `/data`.
+
+### Restoring
+
+1. Stop the container.
+2. Move the old data folder out of the way, or start with an empty one. Don't unpack over a folder that still has the old database: a leftover `pigeonhole.db-journal` would be applied to the restored database.
+3. Unzip the backup into the empty folder:
+
+   ```bash
+   unzip pigeonhole-backup-2026-10-31.zip -d ./data
+   ```
+
+   (`python3 -m zipfile -e pigeonhole-backup-2026-10-31.zip ./data` does the same where `unzip` isn't installed.)
+4. Start the container. Pigeonhole creates a fresh virtualenv, installs the packages in `pip-requirements.txt` and the apt packages listed in the database (both show up on the History page) and deletes `pip-requirements.txt` once the install succeeds. File ownership is set to `PUID`/`PGID` on startup.
+
+Schedules, webhook URLs and the MCP token carry on as before. A run that was still going when the backup was taken shows as failed.
+
+There is deliberately no restore button: restoring replaces the database under the running app, its scheduler and any running scripts, and an upload endpoint would let anyone who can reach the UI replace everything in one request. With the container stopped there is nothing to race against.
+
+## Exporting scripts
+
+**Settings → Export scripts → Download all scripts (zip)** (or `GET /api/export`) gives you a zip with one file per script (`.py` or `.sh`, named after the script) and a `pigeonhole.json` manifest. The manifest lists each script's name, language, schedule, whether it is paused, timeout, the script that runs next and the webhook quiet period.
 
 Environment variables (global and per script), webhook URLs, the MCP token and run history are **not** included, so the zip contains no secrets and is safe to keep in Git or a cloud folder. After a restore you set the variables again and press **Create webhook URL** for any script that had one.
 
