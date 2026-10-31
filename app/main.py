@@ -10,6 +10,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import zipfile
@@ -33,6 +34,8 @@ RUNS_DIR = DATA / "runs"
 WORK_DIR = DATA / "work"
 VENV = DATA / "venv"
 VENV_BIN = VENV / "bin"
+DB_FILE = DATA / "pigeonhole.db"
+PIP_RESTORE = DATA / "pip-requirements.txt"  # left by a restored backup; installed on startup
 TZ = os.environ.get("TZ", "UTC")
 MAX_RUNS = int(os.environ.get("MAX_RUNS", "500"))
 STATIC = Path(__file__).parent / "static"
@@ -40,7 +43,7 @@ STATIC = Path(__file__).parent / "static"
 for d in (SCRIPTS_DIR, RUNS_DIR, WORK_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-db = sqlite3.connect(DATA / "pigeonhole.db", check_same_thread=False)
+db = sqlite3.connect(DB_FILE, check_same_thread=False)
 db.row_factory = sqlite3.Row
 db.executescript(
     """
@@ -442,6 +445,10 @@ async def lifespan(app: FastAPI):
                if not await asyncio.to_thread(apt_installed, r["name"])]
     if missing and shutil_which("apt-get"):
         start_job("restore apt packages", apt_argv("install", missing))
+    if PIP_RESTORE.exists():
+        start_job("restore pip packages",
+                  [str(VENV_BIN / "python"), "-m", "pip", "install", "--no-input", "-r", str(PIP_RESTORE)],
+                  lambda: PIP_RESTORE.unlink(missing_ok=True))
     async with mcp_server.session_manager.run():
         yield
     scheduler.shutdown(wait=False)
@@ -799,6 +806,109 @@ async def export_scripts():
     name = f"pigeonhole-scripts-{time.strftime('%Y-%m-%d')}.zip"
     return Response(buf.getvalue(), media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ------------------------------------------------------------------- backup
+# A full backup is a zip laid out like the data directory, so it unpacks straight back into it. It
+# holds a copy of the database made with SQLite's backup API (consistent even while runs write to
+# it), the pip packages as pip-requirements.txt (installed again on the next startup) and every
+# other file scripts keep under PIGEONHOLE_DATA. Left out: the virtualenv, the working directory,
+# the script files written before each run (they come from the database) and, unless asked for,
+# run logs. The zip contains environment variable values and webhook tokens.
+BACKUP_SKIP = {"venv", "work", "scripts", "runs", DB_FILE.name, PIP_RESTORE.name,
+               *(DB_FILE.name + s for s in ("-journal", "-wal", "-shm"))}
+
+
+def pip_freeze() -> str:
+    if not (VENV_BIN / "python").exists():
+        return ""
+    out = subprocess.run([str(VENV_BIN / "python"), "-m", "pip", "freeze"], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise HTTPException(500, f"could not list pip packages: {out.stderr.strip()[-300:]}")
+    return out.stdout
+
+
+def copy_database() -> Path:
+    """Copy the database to a temporary file with SQLite's online backup API."""
+    fd, tmp = tempfile.mkstemp(prefix="pigeonhole-backup-", suffix=".db")
+    os.close(fd)
+    src, dst = sqlite3.connect(DB_FILE), sqlite3.connect(tmp)
+    try:
+        src.backup(dst)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    finally:
+        src.close()
+        dst.close()
+    return Path(tmp)
+
+
+def backup_files(logs: bool):
+    """(path, name in the zip) for each file under the data directory that belongs in a backup."""
+    skip = BACKUP_SKIP - ({"runs"} if logs else set())
+    for root, dirs, files in os.walk(DATA):
+        rel = Path(root).relative_to(DATA)
+        if rel == Path("."):
+            dirs[:] = [d for d in dirs if d not in skip]
+            files = [f for f in files if f not in skip]
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        for f in sorted(files):
+            p = Path(root) / f
+            if p.is_file() and not p.is_symlink():  # a link could point outside the data directory
+                yield p, (rel / f).as_posix()
+
+
+class Drain:
+    """A write-only file for zipfile; the response sends on what has been written so far."""
+
+    def __init__(self):
+        self.parts: list[bytes] = []
+
+    def write(self, b) -> int:
+        self.parts.append(bytes(b))
+        return len(b)
+
+    def flush(self):
+        pass
+
+    def take(self) -> bytes:
+        out = b"".join(self.parts)
+        self.parts.clear()
+        return out
+
+
+def backup_zip(db_copy: Path, pip_reqs: str, logs: bool):
+    """Yield the zip in pieces of at most about 1 MB, so a big data directory never sits in memory."""
+    out = Drain()
+    try:
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            if pip_reqs:
+                z.writestr(PIP_RESTORE.name, pip_reqs)
+            for path, name in [(db_copy, DB_FILE.name), *backup_files(logs)]:
+                try:
+                    info = zipfile.ZipInfo.from_file(path, name)
+                    src = open(path, "rb")
+                except OSError:  # deleted or unreadable since it was listed
+                    continue
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with src, z.open(info, "w") as dst:
+                    while chunk := src.read(1 << 20):
+                        dst.write(chunk)
+                        yield out.take()
+        yield out.take()
+    finally:
+        db_copy.unlink(missing_ok=True)
+
+
+@app.get("/api/backup")
+async def backup(logs: bool = False):
+    """Download everything needed to restore this server as a zip (see the README for restoring)."""
+    pip_reqs = await asyncio.to_thread(pip_freeze)
+    db_copy = await asyncio.to_thread(copy_database)
+    name = f"pigeonhole-backup-{time.strftime('%Y-%m-%d')}.zip"
+    return StreamingResponse(backup_zip(db_copy, pip_reqs, logs), media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.get("/api/settings")

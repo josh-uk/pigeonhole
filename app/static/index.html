@@ -24,8 +24,8 @@ main{flex:1;min-height:0;display:flex}
 input,select,textarea,button{font:inherit}
 input[type=text],input[type=number],input[type=url],input[type=time],select{background:var(--bg);border:1px solid var(--line);color:var(--text);padding:6px 8px;border-radius:6px;min-width:0}
 input:focus,select:focus{outline:1px solid var(--accent)}
-button.btn{background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer}
-button.btn:hover{border-color:var(--accent)}
+button.btn,a.btn{background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer}
+button.btn:hover,a.btn:hover{border-color:var(--accent)}
 button.primary{background:var(--accent);color:#0b1220;border-color:var(--accent);font-weight:600}
 button.danger:hover{border-color:var(--bad);color:var(--bad)}
 button:disabled{opacity:.5;cursor:default}
@@ -246,7 +246,13 @@ body.resizing.y,body.resizing.y *{cursor:row-resize!important}
         <div class="row" style="flex:none"><button class="btn primary" id="sGlobalSave" style="flex:none">Save</button></div>
       </div>
       <div class="card" style="max-width:640px">
-        <h2>Back up scripts</h2>
+        <h2>Full backup</h2>
+        <div class="hint">Everything needed to restore this server in one zip: scripts, schedules, webhooks, settings, environment variables (script and global), the Python and system package lists and the files your scripts keep in the data directory. The virtualenv and working directory are rebuilt, so they are left out. The zip contains your environment variable values and webhook URLs, so keep it somewhere private. See the README for how to restore it.</div>
+        <div class="checks"><label><input type="checkbox" id="backupLogs"> Include run logs</label></div>
+        <div class="row" style="flex:none"><a class="btn" id="backupBtn" href="/api/backup" download style="flex:none;text-decoration:none">Download backup</a></div>
+      </div>
+      <div class="card" style="max-width:640px">
+        <h2>Export scripts</h2>
         <div class="hint">Download every script as a file in a zip, with a <code>pigeonhole.json</code> listing each one's schedule, timeout and next script. Environment variables, webhook URLs and run history are not included.</div>
         <div class="row" style="flex:none"><a class="btn" href="/api/export" download style="flex:none;text-decoration:none">Download all scripts (zip)</a></div>
       </div>

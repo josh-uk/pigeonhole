@@ -415,6 +415,7 @@ mcpChecks().forEach(c => c.onchange = guard(async () => {
   toast('Saved');
 }));
 document.querySelectorAll('[data-copy]').forEach(b => b.onclick = e => { e.preventDefault(); guard(() => copyInput($(b.dataset.copy)))(); });
+$('#backupLogs').onchange = e => { $('#backupBtn').href = '/api/backup' + (e.target.checked ? '?logs=true' : ''); };
 const saveSettings = () => api('/settings', 'PUT', {ntfy_url: $('#sNtfy').value});
 $('#sSave').onclick = guard(async () => { await saveSettings(); toast('Settings saved'); });
 $('#sTest').onclick = guard(async () => { await saveSettings(); await api('/settings/test', 'POST'); toast('Test notification sent'); });
