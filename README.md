@@ -27,6 +27,7 @@ Write Python and bash in the browser, run them with live output, and put them on
 - **Write scripts with an AI client.** A built-in MCP server lets Claude Code, Claude Desktop or another MCP client create, run and fix scripts here, using that client's own account.
 - **Install what your scripts need.** Add Python packages with pip and system packages with apt (ffmpeg, jq, imagemagick and so on) from the UI. apt packages are remembered and put back if the container is recreated.
 - **Full backup.** One button in Settings (or `GET /api/backup` from a backup tool) downloads a zip with everything needed to restore the server: scripts, schedules, webhooks, settings, environment variables, package lists and the files your scripts keep in the data directory. The database is copied with SQLite's backup API, so it is consistent even while scripts are running. Run logs are optional. See [Full backup and restore](#full-backup-and-restore).
+- **Update check.** Settings shows the build you are running, whether a newer image has been published and what changed, with an optional ntfy message per new version. See [Updates](#updates).
 - **Export your scripts.** One button in Settings downloads every script as a `.py` or `.sh` file in a zip, with a manifest of their schedules. Environment variables are left out.
 - **Failure alerts** to your [ntfy](https://ntfy.sh) topic when a script fails or times out.
 - **Per-script timeouts** and an overlap guard, so a scheduled script never runs on top of itself.
@@ -83,6 +84,7 @@ docker compose up -d --build
 | `PGID`     | `1000`  | Group id to match.                                                   |
 | `MAX_RUNS` | `500`   | How many runs of history (and their logs) to keep.                   |
 | `DATA_DIR` | `/data` | Where everything is stored. Mount this as a volume.                  |
+| `UPDATE_REPO` | `josh-uk/pigeonhole` | GitHub repository (`owner/name`) checked for new versions. Point it at your fork, or set it empty to turn the check off. |
 
 ## How it works
 
@@ -239,6 +241,12 @@ pytest
 ```
 
 The backend is a single FastAPI app in [`app/main.py`](app/main.py) (APScheduler for cron, asyncio subprocesses for runs, SSE for live logs). The UI is plain HTML and JavaScript in [`app/static/`](app/static), with CodeMirror loaded from a CDN, so there is no build step.
+
+## Updates
+
+**Settings → Version** shows which build you are running and whether a newer one has been published. Images record the commit they were built from, and Pigeonhole asks GitHub's public API (no token needed) for the newest commit whose image finished publishing, so it only offers an update once that image can be pulled. When you are behind, it lists the changes since your build and gives the `sha-` tag to update to. A dot on **Settings** flags an available update.
+
+The check runs at most once an hour (**Check now** forces one). Tick **Tell my ntfy topic when an update is available** to get one message per new version. Pigeonhole doesn't update itself: change the image tag (or pull `latest`) and recreate the container. Builds made from source without the `PIGEONHOLE_VERSION` build argument show as a development build and skip the check.
 
 ## Image tags
 

@@ -383,8 +383,26 @@ async function loadSettings() {
   $('#sNtfy').value = s.ntfy_url;
   $('#sGlobalEnv').value = s.global_env;
   $('#tzInfo').textContent = 'Schedules use timezone: ' + s.timezone;
+  $('#verNotify').checked = s.update_notify;
   renderMcp(await api('/mcp'));
+  renderVersion(await api('/version'));
 }
+
+function renderVersion(v) {
+  $('#nav [data-v=settings]').classList.toggle('has-update', v.update);
+  const ver = v.version ? `sha-${v.version}` : 'a development build';
+  const n = v.behind;
+  $('#verStatus').textContent = !v.version ? 'Running a development build, so there is nothing to compare with.'
+    : !v.repo ? `Running ${ver}. Update checks are turned off.`
+    : v.error ? `Running ${ver}. Could not check for updates: ${v.error}`
+    : v.update ? `Running ${ver}. ${n} change${n === 1 ? '' : 's'} published since:`
+    : `Running ${ver}, the latest version.`;
+  $('#verChanges').innerHTML = v.changes.map(c => `<li>${esc(c)}</li>`).join('') + (n > v.changes.length ? `<li>and ${n - v.changes.length} more</li>` : '');
+  $('#verTagRow').style.display = v.update ? '' : 'none';
+  $('#verTag').value = v.tag;
+}
+$('#verCheck').onclick = guard(async () => { renderVersion(await api('/version?refresh=true')); toast('Checked for updates'); });
+$('#verNotify').onchange = guard(async e => { await api('/settings', 'PUT', {update_notify: e.target.checked}); toast('Saved'); });
 
 function renderMcp(m) {
   $('#mcpOff').style.display = m.enabled ? 'none' : '';
@@ -486,6 +504,7 @@ divider('#gPkg', {a: '#v-packages .console', fixed: true, min: [120, 0], max: 20
 
 api('/settings').then(x => { tz = x.timezone; globalNames = envNames(x.global_env || ''); renderSched(); countEnv(); }).catch(() => {});
 loadScripts().catch(e => toast(e.message, true));
+api('/version').then(v => $('#nav [data-v=settings]').classList.toggle('has-update', v.update)).catch(() => {});
 setInterval(() => {
   if (!$('#v-scripts').classList.contains('active') || curRun) return;
   api('/scripts').then(s => {

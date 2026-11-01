@@ -104,6 +104,8 @@ code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddin
 body.resizing{user-select:none}
 body.resizing.x,body.resizing.x *{cursor:col-resize!important}
 body.resizing.y,body.resizing.y *{cursor:row-resize!important}
+nav button.has-update::after{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--warn);margin-left:6px;vertical-align:1px}
+.changes{margin:0;padding-left:20px;color:var(--dim);font-size:13px}
 #toast{position:fixed;bottom:16px;right:16px;background:var(--panel2);border:1px solid var(--line);padding:10px 14px;border-radius:8px;display:none;max-width:360px}
 </style>
 </head>
@@ -232,6 +234,14 @@ body.resizing.y,body.resizing.y *{cursor:row-resize!important}
 
   <section class="view" id="v-settings">
     <div class="page">
+      <div class="card" style="max-width:640px">
+        <h2>Version</h2>
+        <div class="hint" id="verStatus">Checking for updates...</div>
+        <ul class="changes" id="verChanges"></ul>
+        <label class="f" id="verTagRow" style="display:none">Image tag to update to<div class="row"><input type="text" id="verTag" readonly><button class="btn" data-copy="#verTag">Copy</button></div></label>
+        <div class="checks"><label><input type="checkbox" id="verNotify"> Tell my ntfy topic when an update is available</label></div>
+        <div class="row" style="flex:none"><button class="btn" id="verCheck" style="flex:none">Check now</button></div>
+      </div>
       <div class="card" style="max-width:640px">
         <h2>Failure notifications</h2>
         <div class="hint">Sent to your <a href="https://ntfy.sh" target="_blank" rel="noopener" style="color:var(--accent)">ntfy</a> topic when a script fails or times out. Leave blank to disable.</div>
