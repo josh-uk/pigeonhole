@@ -25,6 +25,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
+# the commit this image was built from; Settings compares it with the latest published build
+ARG PIGEONHOLE_VERSION=""
+ENV PIGEONHOLE_VERSION=$PIGEONHOLE_VERSION
+
 VOLUME /data
 EXPOSE 8080
 ENTRYPOINT ["docker-entrypoint.sh"]

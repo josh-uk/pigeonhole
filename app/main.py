@@ -293,14 +293,14 @@ def start_job(title: str, argv: list[str], on_success=None) -> int:
 
 
 # ------------------------------------------------------------ notifications
-def send_ntfy(message: str, title: str = "Pigeonhole", tags: str = "warning") -> Optional[str]:
+def send_ntfy(message: str, title: str = "Pigeonhole", tags: str = "warning", priority: str = "high") -> Optional[str]:
     """Publish a message to the configured ntfy topic; returns an error string or None."""
     url = get_setting("ntfy_url")
     if not url:
         return "no ntfy URL configured"
     try:
         req = urllib.request.Request(url, data=message.encode(), method="POST",
-                                     headers={"Title": title, "Priority": "high", "Tags": tags})
+                                     headers={"Title": title, "Priority": priority, "Tags": tags})
         urllib.request.urlopen(req, timeout=10).read()
     except Exception as e:  # noqa: BLE001
         return f"ntfy: {e}"
@@ -449,8 +449,10 @@ async def lifespan(app: FastAPI):
         start_job("restore pip packages",
                   [str(VENV_BIN / "python"), "-m", "pip", "install", "--no-input", "-r", str(PIP_RESTORE)],
                   lambda: PIP_RESTORE.unlink(missing_ok=True))
+    updates = asyncio.create_task(watch_updates())
     async with mcp_server.session_manager.run():
         yield
+    updates.cancel()
     scheduler.shutdown(wait=False)
 
 
@@ -768,6 +770,7 @@ class Settings(BaseModel):
     # fields left out of a request are not changed
     ntfy_url: Optional[str] = None
     global_env: Optional[str] = None
+    update_notify: Optional[bool] = None
 
 
 # ------------------------------------------------------------------- export
@@ -913,7 +916,8 @@ async def backup(logs: bool = False):
 
 @app.get("/api/settings")
 async def read_settings():
-    return {"ntfy_url": get_setting("ntfy_url"), "global_env": get_setting("global_env"), "timezone": TZ}
+    return {"ntfy_url": get_setting("ntfy_url"), "global_env": get_setting("global_env"), "timezone": TZ,
+            "update_notify": get_setting("update_notify") == "1"}
 
 
 @app.put("/api/settings")
@@ -928,6 +932,8 @@ async def write_settings(s: Settings):
         except ValueError as e:
             raise HTTPException(400, f"global environment variables: {e}")
         set_setting("global_env", s.global_env.rstrip())
+    if s.update_notify is not None:
+        set_setting("update_notify", "1" if s.update_notify else "0")
     return {"ok": True}
 
 
@@ -937,6 +943,81 @@ async def test_notification():
     if error:
         raise HTTPException(502, error)
     return {"ok": True}
+
+
+# ------------------------------------------------------------------- updates
+# The image records the commit it was built from. Settings compares that with the newest commit whose
+# image finished publishing (the last successful run of the publish workflow) using GitHub's public
+# API, so it only says there is an update once that update can actually be pulled.
+VERSION = os.environ.get("PIGEONHOLE_VERSION", "")
+UPDATE_REPO = os.environ.get("UPDATE_REPO", "josh-uk/pigeonhole")  # owner/name; empty turns the check off
+UPDATE_TTL = 3600  # seconds a check is reused; GitHub allows 60 requests an hour without a token
+UPDATE_CHANGES = 20  # at most this many change titles are listed
+update_cache: dict[str, Any] = {}
+
+
+def github(path: str) -> Any:
+    req = urllib.request.Request(f"https://api.github.com/repos/{UPDATE_REPO}{path}",
+                                 headers={"Accept": "application/vnd.github+json", "User-Agent": "pigeonhole"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.load(r)
+
+
+def check_update() -> dict:
+    out: dict[str, Any] = {"version": VERSION[:7], "repo": UPDATE_REPO, "latest": "", "tag": "",
+                           "update": False, "behind": 0, "changes": [], "error": "", "checked": time.time()}
+    if not VERSION or not UPDATE_REPO:
+        return out
+    try:
+        runs = github("/actions/workflows/publish.yml/runs?event=push&status=success&per_page=1")["workflow_runs"]
+        if not runs:
+            out["error"] = "no published build found"
+            return out
+        latest = runs[0]["head_sha"]
+        out["latest"], out["tag"] = latest[:7], f"sha-{latest[:7]}"
+        if latest == VERSION:
+            return out
+        cmp = github(f"/compare/{VERSION}...{latest}")
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"could not reach GitHub: {e}"
+        return out
+    # "behind" means this build is newer than the last published one (its image is still building)
+    if cmp["status"] in ("ahead", "diverged"):
+        commits = cmp.get("commits", [])
+        out["update"], out["behind"] = True, cmp["ahead_by"]
+        out["changes"] = [c["commit"]["message"].split("\n")[0] for c in reversed(commits)][:UPDATE_CHANGES]
+    return out
+
+
+async def latest_version(refresh: bool = False) -> dict:
+    if refresh or time.time() - update_cache.get("checked", 0) > UPDATE_TTL:
+        update_cache.clear()
+        update_cache.update(await asyncio.to_thread(check_update))
+    return update_cache
+
+
+def notify_update(v: dict):
+    """Tells ntfy about a new version once, if turned on in Settings."""
+    if not v["update"] or get_setting("update_notify") != "1" or get_setting("update_notified") == v["latest"]:
+        return
+    n = v["behind"]
+    if not send_ntfy(f"{n} change{'s' if n != 1 else ''} since {v['version']}. Update the image to {v['tag']}.",
+                     "Pigeonhole update available", "arrow_up", "default"):
+        set_setting("update_notified", v["latest"])
+
+
+async def watch_updates():
+    while True:
+        try:
+            notify_update(await latest_version())
+        except Exception:  # noqa: BLE001
+            pass
+        await asyncio.sleep(UPDATE_TTL)
+
+
+@app.get("/api/version")
+async def version(refresh: bool = False):
+    return await latest_version(refresh)
 
 
 # ----------------------------------------------------------------------- MCP
