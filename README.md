@@ -254,3 +254,5 @@ Every merge to `master` publishes to GitHub Container Registry:
 
 - `ghcr.io/josh-uk/pigeonhole:latest`
 - `ghcr.io/josh-uk/pigeonhole:sha-<short-commit>` for pinning to an exact build
+
+Only the 10 newest builds are kept: after each publish, older `sha-` tags and their images are deleted. A container already running an old tag keeps working, but that tag can no longer be pulled, so pin to a recent one.

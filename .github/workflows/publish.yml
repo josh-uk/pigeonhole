@@ -46,3 +46,17 @@ jobs:
           build-args: PIGEONHOLE_VERSION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  cleanup:
+    # Keeps the 10 newest builds. Deleting a build also deletes its per-platform images and
+    # attestations, and untagged images that belong to no kept build go too.
+    needs: publish
+    runs-on: ubuntu-latest
+    concurrency:
+      group: cleanup-images
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          keep-n-tagged: 10
+          exclude-tags: latest
+          delete-untagged: true
